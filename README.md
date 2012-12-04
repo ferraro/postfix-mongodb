@@ -18,6 +18,7 @@ If you need additional extra-features, please contact me at
 contact@ferraro.net.
 
 Example of a /etc/postfix/mmongodb-aliases.cf file:
+
 	#
 	# MongoDB Postfix Alias File
 	# (C) Stephan Ferraro <stephan@ferraro.net>, Ferraro Ltd.
