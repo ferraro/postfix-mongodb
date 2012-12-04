@@ -49,4 +49,5 @@ Example of a /etc/postfix/mmongodb-aliases.cf file:
 	key = name
 
 The file can then be included so in the main.cf file:
+
 	virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf
