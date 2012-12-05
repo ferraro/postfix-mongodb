@@ -18,6 +18,8 @@ experienced users of Postfix with C programming knowledges.
 In future, it would be good that this driver would be included in
 the official postfix release.
 
+The postfix version used here is 2.5.4.
+
 If you need additional extra-features, please contact me at
 contact@ferraro.net.
 
@@ -61,7 +63,7 @@ Installation
 
 1. Download libmongoc version v0.7 at https://github.com/mongodb/mongo-c-driver/zipball/v0.7, compile it and then run make install to install it at /usr/local/lib
 2. Install Ubuntu Linux Server 12.10 (maybe it works too on other Linux distributions, but I have not tested it)
-3. Extract postfix-2.9.3_TIMESTAMP.tar.gz file, run make, then make install. If make fails, try first make tidy before the other makes
+3. Compile this postfix source code
 4. Start MongoDB server
 5. Configure Postfix configuration files, specially add in main.cf the entry "virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf" and add the file /etc/postfix/mongodb-aliases.cf
 6. Start Postfix server and check log file at /var/log/mail.log for debugging purposes
