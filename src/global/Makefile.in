@@ -3,7 +3,7 @@ SRCS	= abounce.c anvil_clnt.c been_here.c bounce.c bounce_log.c \
 	canon_addr.c cfg_parser.c cleanup_strerror.c cleanup_strflags.c \
 	clnt_stream.c conv_time.c db_common.c debug_peer.c debug_process.c \
 	defer.c deliver_completed.c deliver_flock.c deliver_pass.c \
-	deliver_request.c dict_ldap.c dict_mysql.c dict_pgsql.c \
+	deliver_request.c dict_ldap.c dict_mongodb.c dict_mysql.c dict_pgsql.c \
 	dict_proxy.c dict_sqlite.c domain_list.c dot_lockfile.c dot_lockfile_as.c \
 	dsb_scan.c dsn.c dsn_buf.c dsn_mask.c dsn_print.c dsn_util.c \
 	ehlo_mask.c ext_prop.c file_id.c flush_clnt.c header_opts.c \
@@ -37,7 +37,7 @@ OBJS	= abounce.o anvil_clnt.o been_here.o bounce.o bounce_log.o \
 	canon_addr.o cfg_parser.o cleanup_strerror.o cleanup_strflags.o \
 	clnt_stream.o conv_time.o db_common.o debug_peer.o debug_process.o \
 	defer.o deliver_completed.o deliver_flock.o deliver_pass.o \
-	deliver_request.o dict_ldap.o dict_mysql.o dict_pgsql.o \
+	deliver_request.o dict_ldap.o dict_mongodb.o dict_mysql.o dict_pgsql.o \
 	dict_proxy.o dict_sqlite.o domain_list.o dot_lockfile.o dot_lockfile_as.o \
 	dsb_scan.o dsn.o dsn_buf.o dsn_mask.o dsn_print.o dsn_util.o \
 	ehlo_mask.o ext_prop.o file_id.o flush_clnt.o header_opts.o \
@@ -71,7 +71,7 @@ HDRS	= abounce.h anvil_clnt.h been_here.h bounce.h bounce_log.h \
 	canon_addr.h cfg_parser.h cleanup_user.h clnt_stream.h config.h \
 	conv_time.h db_common.h debug_peer.h debug_process.h defer.h \
 	deliver_completed.h deliver_flock.h deliver_pass.h deliver_request.h \
-	dict_ldap.h dict_mysql.h dict_pgsql.h dict_proxy.h dict_sqlite.h domain_list.h \
+	dict_ldap.h dict_mongodb.h dict_mysql.h dict_pgsql.h dict_proxy.h dict_sqlite.h domain_list.h \
 	dot_lockfile.h dot_lockfile_as.h dsb_scan.h dsn.h dsn_buf.h \
 	dsn_mask.h dsn_print.h dsn_util.h ehlo_mask.h ext_prop.h \
 	file_id.h flush_clnt.h header_opts.h header_token.h input_transp.h \
