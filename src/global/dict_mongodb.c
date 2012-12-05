@@ -93,8 +93,9 @@ typedef struct {
  /*
   * MongoDB option defaults and names.
   */
-#define DICT_MONGODB_DEF_HOST	"localhost"
-#define DICT_MONGODB_DEF_PORT	"27017"
+#define DICT_MONGODB_DEF_HOST		"localhost"
+#define DICT_MONGODB_DEF_PORT		"27017"
+#define DICT_MONGODB_DEF_TIMEOUT	1000
 
 /* Private prototypes */
 int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb);
@@ -133,11 +134,17 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	mongo_cursor	cursor[1];
 	char			*db_coll_str;
 	char			*found			= NULL;
+	int				ret;
+	int				repeat;
 
 	/* Check if there is a connection to MongoDB server */
 	if (!dict_mongodb->connected) {
-		msg_warn("lookup failed: no connection to MongoDB server: %s:%d", dict_mongodb->host, dict_mongodb->port);
-		DICT_ERR_VAL_RETURN(dict, DICT_STAT_ERROR, NULL);
+		// Never successfully connected, so connect now
+		msg_info("connect to mongodb server: %s:%d", dict_mongodb->host, dict_mongodb->port);
+		if (dict_mongodb_my_connect(dict_mongodb) != DICT_ERR_NONE) {
+			msg_warn("lookup failed: no connection to mongodb server: %s:%d", dict_mongodb->host, dict_mongodb->port);
+			DICT_ERR_VAL_RETURN(dict, DICT_STAT_ERROR, NULL);
+		}
 	}
 	bson_init(query);
 	bson_append_string(query, dict_mongodb->key, name);
@@ -150,17 +157,42 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	memcpy(db_coll_str + strlen(dict_mongodb->dbname) + 1, dict_mongodb->collection, strlen(dict_mongodb->collection));
 	db_coll_str[strlen(dict_mongodb->dbname) + strlen(dict_mongodb->collection) + 1] = 0;
 
-	mongo_cursor_init(cursor, dict_mongodb->conn, db_coll_str);
-	mongo_cursor_set_query(cursor, query);
-	
-	while (mongo_cursor_next(cursor) == MONGO_OK) {
-		bson_iterator iterator[1];
-		
-		if (bson_find(iterator, mongo_cursor_bson(cursor), dict_mongodb->key)) {
-			found = bson_iterator_string(iterator);
-			break;
+	do {
+		repeat	= 0;
+
+		mongo_cursor_init(cursor, dict_mongodb->conn, db_coll_str);
+		mongo_cursor_set_query(cursor, query);
+
+		ret		= mongo_cursor_next(cursor);
+		if (ret == MONGO_OK) {
+			bson_iterator iterator[1];
+			
+			if (bson_find(iterator, mongo_cursor_bson(cursor), dict_mongodb->key)) {
+				found = bson_iterator_string(iterator);
+				break;
+			}
 		}
-	}
+		// ret != MONGO_OK
+		// Did we had a MongoDB connection problem (maybe wrong authentification)
+		if (dict_mongodb->conn->err == MONGO_IO_ERROR) {
+			msg_info("no connection to mongodb server, reconnect to: %s:%d", dict_mongodb->host, dict_mongodb->port);
+
+			// Try to reconnect
+			mongo_reconnect(dict_mongodb->conn);
+
+			if (mongo_check_connection(dict_mongodb->conn) == MONGO_OK && dict_mongodb->conn->err == MONGO_OK) {
+				// Reconnection was successfull
+				dict_mongodb_auth(dict_mongodb);
+				repeat = 1;
+			} else {
+				// Reconnect to MongoDB server failed, reject by soft error
+				msg_warn("reconnect to mongodb server failed: %s:%d", dict_mongodb->host, dict_mongodb->port);
+				myfree(db_coll_str);
+				DICT_ERR_VAL_RETURN(dict, DICT_STAT_FAIL, NULL);
+			}
+		}
+	} while (repeat);
+	
 	bson_destroy( query );
 	mongo_cursor_destroy( cursor );
 	myfree(db_coll_str);
@@ -193,16 +225,8 @@ static void dict_mongodb_close(DICT *dict)
 }
 
 /* dict_mongodb_my_connect - connect to mongodb database */
-int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
+int		dict_mongodb_auth(DICT_MONGODB *dict_mongodb)
 {
-	/*
-     * Connect to mongodb database
-     */
-	dict_mongodb->connected = 0;
-	if (mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port)) {
-		msg_fatal("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
-		DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
-	}
 	if (dict_mongodb->auth) {
 		/* Authentificate to MongoDB server */
 		if (mongo_cmd_authenticate(dict_mongodb->conn, dict_mongodb->dbname, dict_mongodb->username, dict_mongodb->password) == MONGO_ERROR) {
@@ -210,6 +234,25 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
 			DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
 		}
 	}
+}
+
+/* dict_mongodb_my_connect - connect to mongodb database */
+int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
+{
+	/*
+     * Connect to mongodb database
+     */
+	dict_mongodb->connected = 0;
+	if (mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port)) {
+		msg_warn("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
+		DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
+	}
+	/* Set timeout of 1000 ms */
+	mongo_set_op_timeout(dict_mongodb->conn, DICT_MONGODB_DEF_TIMEOUT);
+
+	/* authentificate */
+	dict_mongodb_auth(dict_mongodb);
+	
 	dict_mongodb->connected = 1;
 	DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_NONE, DICT_ERR_NONE);
 }
