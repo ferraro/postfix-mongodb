@@ -467,8 +467,10 @@ int     main(int argc, char **argv)
     master_config();
     master_sigsetup();
     master_flow_init();
-    msg_info("daemon started -- version %s, configuration %s",
-	     var_mail_version, var_config_dir);
+/*    msg_info("daemon started -- version %s, configuration %s",
+	     var_mail_version, var_config_dir); */
+    msg_info("daemon started -- version %s, configuration %s, MongoDB version of https://github.com/digitalturbulence/postfix-mongodb",
+			 var_mail_version, var_config_dir);
 
     /*
      * Process events. The event handler will execute the read/write/timer

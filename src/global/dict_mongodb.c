@@ -87,6 +87,7 @@ typedef struct {
 	char			*collection;	/* collection */
 	char			*key;			/* key */
 	mongo			conn[1];		/* MongoDB connection structure */
+	int				connected;		/* 1 = connected, 0 = disconnected */
 } DICT_MONGODB;
 
  /*
@@ -132,7 +133,12 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	mongo_cursor	cursor[1];
 	char			*db_coll_str;
 	char			*found			= NULL;
-	
+
+	/* Check if there is a connection to MongoDB server */
+	if (!dict_mongodb->connected) {
+		msg_warn("lookup failed: no connection to MongoDB server: %s:%d", dict_mongodb->host, dict_mongodb->port);
+		DICT_ERR_VAL_RETURN(dict, DICT_STAT_ERROR, NULL);
+	}
 	bson_init(query);
 	bson_append_string(query, dict_mongodb->key, name);
 	bson_finish(query);
@@ -159,7 +165,13 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	mongo_cursor_destroy( cursor );
 	myfree(db_coll_str);
 
-	return found;
+	if (found) {
+		// Value found in database
+		dict->error = DICT_STAT_SUCCESS;
+		return found;
+	}
+	// Value not found in database
+	DICT_ERR_VAL_RETURN(dict, DICT_STAT_SUCCESS, NULL);
 }
 
 /* dict_mysql_close - close MYSQL database */
@@ -177,7 +189,7 @@ static void dict_mongodb_close(DICT *dict)
     myfree(dict_mongodb->collection);
     myfree(dict_mongodb->key);
     dict_free(dict);
-	// mongo_destroy( conn );
+	mongo_destroy(dict_mongodb->conn);
 }
 
 /* dict_mongodb_my_connect - connect to mongodb database */
@@ -186,20 +198,20 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
 	/*
      * Connect to mongodb database
      */
+	dict_mongodb->connected = 0;
 	if (mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port)) {
 		msg_fatal("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
-		dict_mongodb_close((DICT *)dict_mongodb);
-		return -1;
+		DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
 	}
 	if (dict_mongodb->auth) {
 		/* Authentificate to MongoDB server */
 		if (mongo_cmd_authenticate(dict_mongodb->conn, dict_mongodb->dbname, dict_mongodb->username, dict_mongodb->password) == MONGO_ERROR) {
 			msg_fatal("mongodb autentification failed: %s at host %s", dict_mongodb->username, dict_mongodb->host);
-			dict_mongodb_close((DICT *)dict_mongodb);
-			return -1;
+			DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
 		}
 	}
-	return 0;
+	dict_mongodb->connected = 1;
+	DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_NONE, DICT_ERR_NONE);
 }
 
 /* dict_mongodb_open - open memcache */
@@ -227,10 +239,7 @@ DICT   *dict_mongodb_open(const char *name, int open_flags, int dict_flags)
 	dict_mongodb->parser		= parser;
 	mongodb_parse_config(dict_mongodb, name);
 	dict_mongodb->dict.owner	= cfg_get_owner(dict_mongodb->parser);
-
-	if (dict_mongodb_my_connect(dict_mongodb) == -1) {
-		return NULL;
-	}
+	dict_mongodb_my_connect(dict_mongodb);
 	
 	return (DICT_DEBUG(&dict_mongodb->dict));
 }
