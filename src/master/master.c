@@ -469,7 +469,7 @@ int     main(int argc, char **argv)
     master_flow_init();
 /*    msg_info("daemon started -- version %s, configuration %s",
 	     var_mail_version, var_config_dir); */
-    msg_info("daemon started -- version %s, configuration %s, MongoDB version of https://github.com/digitalturbulence/postfix-mongodb",
+    msg_info("daemon started -- version %s, configuration %s, MongoDB version of https://github.com/ferraro/postfix-mongodb",
 			 var_mail_version, var_config_dir);
 
     /*
