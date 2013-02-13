@@ -18,7 +18,7 @@ experienced users of Postfix with C programming knowledges.
 In future, it would be good that this driver would be included in
 the official postfix release.
 
-The postfix version used here is 2.5.4.
+The postfix version used here is 2.9.4.
 
 If you need additional extra-features, please contact me at
 contact@ferraro.net.
