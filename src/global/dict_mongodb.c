@@ -206,14 +206,14 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	DICT_ERR_VAL_RETURN(dict, DICT_STAT_SUCCESS, NULL);
 }
 
-/* dict_mysql_close - close MYSQL database */
+/* dict_mongodb_close - close MongoDB database */
 
 static void dict_mongodb_close(DICT *dict)
 {
     DICT_MONGODB *dict_mongodb = (DICT_MONGODB *) dict;
 	
     cfg_parser_free(dict_mongodb->parser);
-    myfree(dict_mongodb->host);
+	myfree(dict_mongodb->host);
 	if (dict_mongodb->auth) {
 		myfree(dict_mongodb->username);
 		myfree(dict_mongodb->password);
@@ -242,9 +242,22 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
 	/*
      * Connect to mongodb database
      */
+	int status;
+	
 	dict_mongodb->connected = 0;
-	if (mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port)) {
-		msg_warn("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
+	status = mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port);
+	if (status != MONGO_OK) {
+		switch ( dict_mongodb->conn->err ) {
+			case MONGO_CONN_NO_SOCKET:
+				msg_warn("connect to mongodb database failed: %s at port %d: no socket", dict_mongodb->host, dict_mongodb->port);
+				break;
+			case MONGO_CONN_FAIL:
+				msg_warn("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
+				break;
+			case MONGO_CONN_NOT_MASTER:
+				msg_warn("connect to mongodb database failed: %s at port %d: not master", dict_mongodb->host, dict_mongodb->port);
+				break;
+		}
 		DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
 	}
 	/* Set timeout of 1000 ms */
