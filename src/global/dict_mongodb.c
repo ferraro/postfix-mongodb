@@ -220,8 +220,8 @@ static void dict_mongodb_close(DICT *dict)
 	}
     myfree(dict_mongodb->collection);
     myfree(dict_mongodb->key);
-    dict_free(dict);
 	mongo_destroy(dict_mongodb->conn);
+    dict_free(dict);
 }
 
 /* dict_mongodb_my_connect - connect to mongodb database */
