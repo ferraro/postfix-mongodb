@@ -73,3 +73,9 @@ Installation
 4. Start MongoDB server
 5. Configure Postfix configuration files, specially add in main.cf the entry "virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf" and add the file /etc/postfix/mongodb-aliases.cf
 6. Start Postfix server and check log file at /var/log/mail.log for debugging purposes
+
+Implementing new features
+=========================
+
+If you need new features, please contact me at contact@ferraro.net.
+Any project work need to be paid. Additionally any work on it it will be included for everyone in this GitHub repository as its an open source project.
