@@ -61,7 +61,7 @@ The file can then be included so in the main.cf file:
 Features
 ========
 - supports Plus Addressing formats, e.g. address+test@domain.tld
-- try to reconnect to MongoDB server if it was gone or restarted
+- reconnect to MongoDB server if it was gone or restarted
 
 Installation
 ============
