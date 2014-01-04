@@ -161,7 +161,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	}
 
 	bson_init(query);
-    if (plus_name == NULL) {
+	if (plus_name == NULL) {
 		bson_append_string(query, dict_mongodb->key, name);
 	} else {
 		bson_append_string(query, dict_mongodb->key, plus_name);
