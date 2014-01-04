@@ -136,7 +136,8 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	char			*found			= NULL;
 	int				ret;
 	int				repeat;
-
+	char			*plus_name		= NULL;
+	
 	/* Check if there is a connection to MongoDB server */
 	if (!dict_mongodb->connected) {
 		// Never successfully connected, so connect now
@@ -146,10 +147,27 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 			DICT_ERR_VAL_RETURN(dict, DICT_STAT_ERROR, NULL);
 		}
 	}
+
+	// Support Plus Addressing formats
+	// Example: name+test@domain.tld should be converted to name@domain.tld
+	if (strchr(name, '+') && strchr(name, '@')) {
+		// Allocate a tiny amount more memory space than necessary to reduce code complexity
+		plus_name			= mymalloc(strlen(name) + 1);
+		// Copy complete name to new string
+		strcpy(plus_name, name);
+		
+		// Overwrite the string from +test@domain.tld to @domain.tld
+		strcpy(strchr(plus_name, '+'), strchr(plus_name, '@'));
+	}
+
 	bson_init(query);
-	bson_append_string(query, dict_mongodb->key, name);
+    if (plus_name == NULL) {
+		bson_append_string(query, dict_mongodb->key, name);
+	} else {
+		bson_append_string(query, dict_mongodb->key, plus_name);
+	}
 	bson_finish(query);
-	
+
 	/* Create string like tutorial.persons */
 	db_coll_str	= mymalloc(strlen(dict_mongodb->dbname) + strlen(dict_mongodb->collection) + 2);
 	memcpy(db_coll_str, dict_mongodb->dbname, strlen(dict_mongodb->dbname));
@@ -188,6 +206,9 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 				// Reconnect to MongoDB server failed, reject by soft error
 				msg_warn("reconnect to mongodb server failed: %s:%d", dict_mongodb->host, dict_mongodb->port);
 				myfree(db_coll_str);
+				if (plus_name) {
+					myfree(plus_name);
+				}
 				DICT_ERR_VAL_RETURN(dict, DICT_STAT_FAIL, NULL);
 			}
 		}
@@ -196,6 +217,10 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	bson_destroy( query );
 	mongo_cursor_destroy( cursor );
 	myfree(db_coll_str);
+
+	if (plus_name) {
+		myfree(plus_name);
+	}
 
 	if (found) {
 		// Value found in database
