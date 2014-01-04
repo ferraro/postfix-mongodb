@@ -58,6 +58,11 @@ The file can then be included so in the main.cf file:
 
 	virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf
 
+Features
+========
+- supports Plus Addressing formats, e.g. address+test@domain.tld
+- try to reconnect to MongoDB server if it was gone or restarted
+
 Installation
 ============
 
@@ -78,7 +83,9 @@ Testing
 =======
 Simply try if it works by executing the following postfix command:
 
-       # postmap -q 'test@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
+       # postmap -q 'address@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
+       test@domain.tld
+       # postmap -q 'address+test@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
        test@domain.tld
 
 If nothing appears, then postmap command should return with an exit code of 1. You can check it with the echo command:
