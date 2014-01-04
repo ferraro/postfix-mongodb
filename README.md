@@ -84,7 +84,7 @@ Simply try if it works by executing the following postfix command:
 If nothing appears, then postmap command should return with an exit code with 1. You can check it with the echo command:
 
       # echo $?
-      # 1
+      1
 
 Implementing new features
 =========================
