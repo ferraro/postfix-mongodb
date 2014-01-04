@@ -81,7 +81,7 @@ Simply try if it works by executing the following postfix command:
        # postmap -q 'test@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
        test@domain.tld
 
-If nothing appears, then postmap command should return with an exit code with 1. You can check it with the echo command:
+If nothing appears, then postmap command should return with an exit code of 1. You can check it with the echo command:
 
       # echo $?
       1
