@@ -59,7 +59,7 @@ The file can then be included so in the main.cf file:
 	virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf
 
 Installation
-========
+============
 
 1. Download libmongoc version v0.7 at https://github.com/mongodb/mongo-c-driver/zipball/v0.7, compile it and then run make install to install it at /usr/local/lib
 2. Install Ubuntu Linux Server 12.10 (maybe it works too on other Linux distributions, but I have not tested it)
@@ -73,6 +73,17 @@ Installation
 4. Start MongoDB server
 5. Configure Postfix configuration files, specially add in main.cf the entry "virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf" and add the file /etc/postfix/mongodb-aliases.cf
 6. Start Postfix server and check log file at /var/log/mail.log for debugging purposes
+
+Try if it works
+===============
+Simply try if it works by executing the following postfix command:
+
+       # postmap -q 'test@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
+       # test@domain.tld
+
+If nothing appears, then postmap command should return with an exit code with 1. You can check it with the echo command:
+      # echo $?
+      # 1
 
 Implementing new features
 =========================
