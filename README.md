@@ -74,12 +74,12 @@ Installation
 5. Configure Postfix configuration files, specially add in main.cf the entry "virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf" and add the file /etc/postfix/mongodb-aliases.cf
 6. Start Postfix server and check log file at /var/log/mail.log for debugging purposes
 
-Try if it works
-===============
+Testing
+=======
 Simply try if it works by executing the following postfix command:
 
        # postmap -q 'test@domain.tld' mongodb:/etc/postfix/mongodb-aliases.cf 
-       # test@domain.tld
+       test@domain.tld
 
 If nothing appears, then postmap command should return with an exit code with 1. You can check it with the echo command:
       # echo $?
