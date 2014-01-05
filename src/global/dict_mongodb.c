@@ -86,6 +86,7 @@ typedef struct {
 	char			*dbname;		/* database name */
 	char			*collection;	/* collection */
 	char			*key;			/* key */
+	char			*value;			/* value */
 	mongo			conn[1];		/* MongoDB connection structure */
 	int				connected;		/* 1 = connected, 0 = disconnected */
 } DICT_MONGODB;
@@ -122,6 +123,7 @@ static void mongodb_parse_config(DICT_MONGODB *dict_mongodb, const char *mongodb
     dict_mongodb->dbname		= cfg_get_str(p, "dbname", "", 1, 0);
 	dict_mongodb->collection	= cfg_get_str(p, "collection", "", 1, 0);
 	dict_mongodb->key			= cfg_get_str(p, "key", "", 1, 0);
+	dict_mongodb->value			= cfg_get_str(p, "value", "", 1, 0);
 }
 
 /* dict_mysql_lookup - find database entry, for the moment, it supports only key/value strings */
@@ -185,7 +187,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 		if (ret == MONGO_OK) {
 			bson_iterator iterator[1];
 			
-			if (bson_find(iterator, mongo_cursor_bson(cursor), dict_mongodb->key)) {
+			if (bson_find(iterator, mongo_cursor_bson(cursor), dict_mongodb->value)) {
 				found = bson_iterator_string(iterator);
 				break;
 			}

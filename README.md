@@ -44,15 +44,23 @@ Example of a /etc/postfix/mmongodb-aliases.cf file:
 	# The database name on the servers.
 	dbname = test
 
-	# Search query by key and value
+	
+	# Search query by key and return value
 	# Example:
 	# collection = address
-	# key = name
+	# key = email
+	# value = newEmail
 	#
-	# means in MongoDB search query: db.address.find({name: full_email_address});
-	# The value with the full_email_address is filled up by Postfix
+	# This means in MongoDB JavaScript search query:
+	# use address;
+	# var response = db.address.find({email: full_email_address}); 
+	# console.log(response.newEmail);
+	#
+	# It would then return the property newEmail of the found object returned by MongoDB find() command.   
+	# The value with the full_email_address is filled up by Postfix.
 	collection = address
-	key = name
+	key = email
+	value = newEmail
 
 The file can then be included so in the main.cf file:
 
@@ -60,6 +68,7 @@ The file can then be included so in the main.cf file:
 
 Features
 ========
+- find and return string value of the found object
 - supports Plus Addressing formats, e.g. address+test@domain.tld
 - reconnect to MongoDB server if it was gone or restarted
 
