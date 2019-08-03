@@ -177,7 +177,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	}
 
 	// Value not found in database
-    DICT_ERR_VAL_RETURN(dict_mc, DICT_ERR_RETRY, (char *) 0);
+    DICT_ERR_VAL_RETURN(dict, DICT_ERR_RETRY, (char *) 0);
 }
 
 /* dict_mongodb_close - close MongoDB database */
