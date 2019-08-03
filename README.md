@@ -31,7 +31,7 @@ Example of a /etc/postfix/mmongodb-aliases.cf file:
 	#
 
 	# URI
-	uri = mongodb://root:root@localhost:27017?appname=postfix
+	uri = mongodb://root:root@localhost:27017/?appname=postfix
 
 	# The database name on the servers.
 	dbname = test
