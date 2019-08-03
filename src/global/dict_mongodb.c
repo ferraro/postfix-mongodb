@@ -2,7 +2,7 @@
 /* NAME
 /*	dict_mongodb 3
 /* SUMMARY
-/*	dictionary interface to mongodb
+/*	dictionary interface to mongodb, compatible with libmongoc-1.0
 /* SYNOPSIS
 /*	#include <dict_mongodb.h>
 /*
@@ -241,7 +241,7 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
     }
 
     dict_mongodb->mongo_database = mongoc_client_get_database(dict_mongodb->mongo_client, dict_mongodb->dbname);
-    dict_mongodb->mongo_collection = mongoc_client_get_collection(dict_mongodb->mongo_client, dict_mongodb->collection);
+    dict_mongodb->mongo_collection = mongoc_client_get_collection(dict_mongodb->mongo_client, dict_mongodb->dbname, dict_mongodb->collection);
 
 	dict_mongodb->connected = 1;
 
