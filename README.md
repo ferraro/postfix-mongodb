@@ -78,7 +78,7 @@ Installation
 4. Compile this postfix source code, on Ubuntu Linux you need to run:
 
 		make tidy
-		make makefiles CCARGS="-DUSE_TLS"
+		make makefiles CCARGS="-DUSE_TLS" AUXLIBS="-lssl -lcrypto"
 		make SYSLIBS="-L/usr/lib/x86_64-linux-gnu -lssl -lcrypto -lpcre -ldb -lnsl -lresolv -lbson-1.0 -lmongoc-1.0"
 		make install
 
