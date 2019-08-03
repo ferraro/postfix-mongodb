@@ -193,8 +193,6 @@ static void dict_mongodb_close(DICT *dict)
     cfg_parser_free(dict_mongodb->parser);
     myfree(dict_mongodb->collection);
     myfree(dict_mongodb->key);
-	mongo_destroy(dict_mongodb->conn);
-    dict_free(dict);
 
     /*
     * Release our handles and clean up libmongoc
@@ -205,6 +203,7 @@ static void dict_mongodb_close(DICT *dict)
     mongoc_client_destroy(dict_mongodb->client);
     mongoc_cleanup();
 
+    dict_free(dict);
 }
 
 /* dict_mongodb_my_connect - connect to mongodb database */
@@ -237,10 +236,9 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
     * Create a new client instance
     */
     dict_mongodb->client = mongoc_client_new_from_uri(dict_mongodb->uri);
-    if (!client) {
+    if (!dict_mongodb->client) {
         msg_warn("connect to mongodb database failed");
         DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
-        return;
     }
 
     dict_mongodb->mongo_database = mongoc_client_get_database(dict_mongodb->client, dict_mongodb->dbname);
