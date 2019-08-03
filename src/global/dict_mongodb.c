@@ -30,7 +30,7 @@
 /* HISTORY
 /* .ad
 /* .fi
-/*	This version has been written by Stephan Ferraro, Ferraro Ltd.
+/*	This version has been written by Stephan Ferraro, Aionda GmbH
 /*  E-Mail: stephan@ferraro.net
 /* AUTHOR(S)
 /*	Wietse Venema
@@ -65,11 +65,10 @@
 #define MONGO_HAVE_STDINT	1
 #define MONGO_HAVE_UNISTD	1
 #define MONGO_USE__INT64	1
-#include <mongo.h>
 
 /* Application-specific. */
 
-#include <mongo.h>
+#include <mongo-client/mongo.h>
 #include "dict_mongodb.h"
 
  /*

@@ -77,12 +77,17 @@ Installation
 
 1. Install Ubuntu Linux Server 19.04 (maybe it works too on other Linux distributions, but I have not tested it)
 
-2. Install libmongoc and libbson version v1.0 at Ubuntu 13:
+2. Install C compiler and development environment
 
+        apt-get install make gcc libc-dev libdb-dev libssl-dev
+
+3. Install MongoDB libraries at Ubuntu 13:
+
+        apt-get install libmongo-client-dev
         apt-get install libmongoc-1.0-0
         apt-get install libbson-1.0
 
-3. Compile this postfix source code, on Ubuntu Linux you need to run:
+4. Compile this postfix source code, on Ubuntu Linux you need to run:
 
 		make tidy
 		make makefiles CCARGS="-DUSE_TLS"
