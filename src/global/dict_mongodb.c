@@ -234,14 +234,14 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
     /*
     * Create a new client instance
     */
-    dict_mongodb->client = mongoc_client_new_from_uri(dict_mongodb->uri);
-    if (!dict_mongodb->client) {
+    dict_mongodb->mongo_client = mongoc_client_new_from_uri(dict_mongodb->uri);
+    if (!dict_mongodb->mongo_client) {
         msg_warn("connect to mongodb database failed");
         DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
     }
 
-    dict_mongodb->mongo_database = mongoc_client_get_database(dict_mongodb->client, dict_mongodb->dbname);
-    dict_mongodb->mongo_collection = mongoc_client_get_collection(dict_mongodb->client, dict_mongodb->collection);
+    dict_mongodb->mongo_database = mongoc_client_get_database(dict_mongodb->mongo_client, dict_mongodb->dbname);
+    dict_mongodb->mongo_collection = mongoc_client_get_collection(dict_mongodb->mongo_client, dict_mongodb->collection);
 
 	dict_mongodb->connected = 1;
 
