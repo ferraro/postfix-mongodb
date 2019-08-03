@@ -75,13 +75,18 @@ Features
 Installation
 ============
 
-1. Download libmongoc version v0.7 at https://github.com/mongodb/mongo-c-driver/zipball/v0.7, compile it and then run make install to install it at /usr/local/lib
-2. Install Ubuntu Linux Server 12.10 (maybe it works too on other Linux distributions, but I have not tested it)
+1. Install Ubuntu Linux Server 19.04 (maybe it works too on other Linux distributions, but I have not tested it)
+
+2. Install libmongoc and libbson version v1.0 at Ubuntu 13:
+
+        apt-get install libmongoc-1.0-0
+        apt-get install libbson-1.0
+
 3. Compile this postfix source code, on Ubuntu Linux you need to run:
 
 		make tidy
 		make makefiles CCARGS="-DUSE_TLS"
-		make SYSLIBS="-L/usr/lib/x86_64-linux-gnu -lssl -lcrypto -lpcre -ldb -lnsl -lresolv -L/usr/local/lib -lmongoc"
+		make SYSLIBS="-L/usr/lib/x86_64-linux-gnu -lssl -lcrypto -lpcre -ldb -lnsl -lresolv -lmongoc"
 		make install
 
 4. Start MongoDB server
