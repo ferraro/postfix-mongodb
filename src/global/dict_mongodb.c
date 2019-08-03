@@ -86,7 +86,6 @@ typedef struct {
 	char			*collection;	/* collection */
 	char			*key;			/* key */
 	char			*value;			/* value */
-	mongo			conn[1];		/* MongoDB connection structure */
 	int				connected;		/* 1 = connected, 0 = disconnected */
 } DICT_MONGODB;
 
