@@ -158,10 +158,12 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 
         // Return search key, which means value has been found in mongodb
         if (!plus_name) {
-            found = name;
+            found = strdup(name);
         } else {
-            found = plus_name;
+            found = strdup(plus_name);
         }
+        // virtual agent needs the name without @domainname so convert foo@bar.tld to foo.
+        found[strchr(found, '@')] = 0;
     }
 
     bson_destroy(query);
