@@ -164,8 +164,8 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
         *foundStrPtr = 0; // Terminate String at '@' character
     }
 
-    bson_destroy(query);
     mongoc_cursor_destroy(cursor);
+    bson_destroy(query);
 
 	if (plus_name) {
 		myfree(plus_name);
@@ -173,11 +173,13 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 
 	if (found) {
 		// Value found in database
-        DICT_ERR_VAL_RETURN(dict, DICT_STAT_SUCCESS, found);
+        dict->error = DICT_STAT_SUCCESS;
+        return found;
 	}
 
 	// Value not found in database
-    DICT_ERR_VAL_RETURN(dict, DICT_STAT_FAIL, NULL);
+	dict->error = DICT_STAT_FAIL;
+	return NULL;
 }
 
 /* dict_mongodb_close - close MongoDB database */
