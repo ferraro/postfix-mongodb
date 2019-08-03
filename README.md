@@ -83,9 +83,7 @@ Installation
 
 3. Install MongoDB libraries at Ubuntu 13:
 
-        apt-get install libmongo-client-dev
-        apt-get install libmongoc-1.0-0
-        apt-get install libbson-1.0
+        apt-get install libmongo-client-dev libbson-dev libmongoc-1.0-0 libbson-1.0
 
 4. Compile this postfix source code, on Ubuntu Linux you need to run:
 
