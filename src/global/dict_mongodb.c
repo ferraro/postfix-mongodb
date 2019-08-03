@@ -178,7 +178,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	}
 
 	// Value not found in database
-	dict->error = DICT_STAT_FAIL;
+	dict->error = DICT_STAT_SUCCESS;
 	return NULL;
 }
 
