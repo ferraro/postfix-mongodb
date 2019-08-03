@@ -229,7 +229,6 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
     if (!dict_mongodb->uri) {
         msg_warn("failed to parse URI: %s error message: %s", dict_mongodb->uri, error.message);
         DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
-        return;
     }
 
     /*
