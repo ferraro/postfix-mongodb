@@ -177,12 +177,11 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 
 	if (found) {
 		// Value found in database
-		dict->error = DICT_STAT_SUCCESS;
-		return found;
+        DICT_ERR_VAL_RETURN(dict, DICT_ERR_NONE, STR(found));
 	}
 
 	// Value not found in database
-	DICT_ERR_VAL_RETURN(dict, DICT_STAT_SUCCESS, NULL);
+    DICT_ERR_VAL_RETURN(dict, DICT_ERR_NONE, DICT_STAT_FAIL);
 }
 
 /* dict_mongodb_close - close MongoDB database */
