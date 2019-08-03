@@ -71,7 +71,7 @@ Installation
 
 2. Install C compiler and development environment
 
-        apt-get install make gcc libc-dev libdb-dev libssl-dev libglib2.0-dev cmake libssl-dev libsasl2-dev
+        apt-get install make m4 gcc libc-dev libdb-dev libssl-dev libglib2.0-dev cmake libssl-dev libsasl2-dev
 
 3. Install MongoDB libraries at Ubuntu 13:
 
@@ -86,7 +86,7 @@ Installation
 
 4. Start MongoDB server
 5. Configure Postfix configuration files, specially add in main.cf the entry "virtual_mailbox_maps = mongodb:/etc/postfix/mongodb-aliases.cf" and add the file /etc/postfix/mongodb-aliases.cf
-6. Start Postfix server and check log file at /var/log/mail.log for debugging purposes
+6. Start Postfix server with the command "/usr/sbin/postfix start" and check log file at /var/log/mail.log for debugging purposes
 
 Testing
 =======
