@@ -71,7 +71,7 @@ Installation
 
         apt-get install make m4 gcc libc-dev libdb-dev libssl-dev libglib2.0-dev cmake libssl-dev libsasl2-dev
 
-3. Install MongoDB libraries at Ubuntu 13:
+3. Install MongoDB libraries at Ubuntu 19.04:
 
         apt-get install libbson-1.0 libbson-dev libmongoc-1.0-0 libmongoc-dev
 
