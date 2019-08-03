@@ -89,12 +89,6 @@ typedef struct {
 	int				    connected;		    /* 1 = connected, 0 = disconnected */
 } DICT_MONGODB;
 
- /*
-  * MongoDB option defaults and names.
-  */
-#define DICT_MONGODB_DEF_URI		"mongodb://localhost:27017"
-#define DICT_MONGODB_DEF_TIMEOUT	1000
-
 /* Private prototypes */
 int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb);
 
@@ -224,7 +218,7 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
     * Safely create a MongoDB URI object from the given string
     */
     dict_mongodb->mongo_uri = mongoc_uri_new_with_error(dict_mongodb->uri, &error);
-    if (!dict_mongodb->uri) {
+    if (!dict_mongodb->mongo_uri) {
         msg_warn("failed to parse URI: %s error message: %s", dict_mongodb->uri, error.message);
         DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
     }
