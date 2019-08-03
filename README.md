@@ -79,7 +79,7 @@ Installation
 
 2. Install C compiler and development environment
 
-        apt-get install make gcc libc-dev libdb-dev libssl-dev
+        apt-get install make gcc libc-dev libdb-dev libssl-dev libglib2.0-dev
 
 3. Install MongoDB libraries at Ubuntu 13:
 
