@@ -82,7 +82,6 @@ typedef struct {
 	char			    *dbname;		    /* database name */
 	char			    *collection;	    /* collection name */
 	char			    *key;			    /* key */
-	char			    *value;			    /* value */
     mongoc_client_t     *mongo_client;      /* Mongo client handle */
     mongoc_uri_t        *mongo_uri;         /* Mongo URI */
     mongoc_database_t   *mongo_database;    /* Mongo database */
@@ -111,7 +110,6 @@ static void mongodb_parse_config(DICT_MONGODB *dict_mongodb, const char *mongodb
     dict_mongodb->dbname		= cfg_get_str(p, "dbname", "", 1, 0);
 	dict_mongodb->collection	= cfg_get_str(p, "collection", "", 1, 0);
 	dict_mongodb->key			= cfg_get_str(p, "key", "", 1, 0);
-	dict_mongodb->value			= cfg_get_str(p, "value", "", 1, 0);
 }
 
 /* dict_mysql_lookup - find database entry, for the moment, it supports only key/value strings */
