@@ -30,16 +30,8 @@ Example of a /etc/postfix/mmongodb-aliases.cf file:
 	# (C) Stephan Ferraro <stephan@ferraro.net>, Ferraro Ltd.
 	#
 
-	# Hostname
-	host = 127.0.0.1
-
-	# Port
-	port = 27017
-
-	# Use authentification to log into mongodb
-	mongo_auth = 1
-	mongo_user = root
-	mongo_password = root
+	# URI
+	uri = mongodb://root:root@localhost:27017?appname=postfix
 
 	# The database name on the servers.
 	dbname = test
@@ -89,7 +81,7 @@ Installation
 
 		make tidy
 		make makefiles CCARGS="-DUSE_TLS"
-		make SYSLIBS="-L/usr/lib/x86_64-linux-gnu -lssl -lcrypto -lpcre -ldb -lnsl -lresolv -lmongoc"
+		make SYSLIBS="-L/usr/lib/x86_64-linux-gnu -lssl -lcrypto -lpcre -ldb -lnsl -lresolv -lbson-1.0 -lmongoc-1.0"
 		make install
 
 4. Start MongoDB server

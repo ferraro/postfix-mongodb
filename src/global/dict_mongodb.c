@@ -68,6 +68,7 @@
 
 /* Application-specific. */
 
+#include <bson/bson.h>
 #include <mongoc/mongoc.h>
 #include "dict_mongodb.h"
 
@@ -75,25 +76,24 @@
   * Structure of one mongodb dictionary handle.
   */
 typedef struct {
-    DICT			dict;           /* parent class */
-    CFG_PARSER		*parser;		/* common parameter parser */
-    char			*host;			/* hostname */
-    unsigned int	port;			/* port */
-    unsigned int	auth;			/* 1 if authentification should be used, otherwise 0 */
-	char			*username;		/* username if auth == 1 */
-	char			*password;		/* password if auth == 1 */
-	char			*dbname;		/* database name */
-	char			*collection;	/* collection */
-	char			*key;			/* key */
-	char			*value;			/* value */
-	int				connected;		/* 1 = connected, 0 = disconnected */
+    DICT			    dict;               /* parent class */
+    CFG_PARSER		    *parser;		    /* common parameter parser */
+    char			    *uri;			    /* URI like mongodb://localhost:27017 */
+	char			    *dbname;		    /* database name */
+	char			    *collection;	    /* collection name */
+	char			    *key;			    /* key */
+	char			    *value;			    /* value */
+    mongoc_client_t     *mongo_client;      /* Mongo client handle */
+    mongoc_uri_t        *mongo_uri;         /* Mongo URI */
+    mongoc_database_t   *mongo_database;    /* Mongo database */
+    mongoc_collection_t *mongo_collection;  /* Mongo collection */
+	int				    connected;		    /* 1 = connected, 0 = disconnected */
 } DICT_MONGODB;
 
  /*
   * MongoDB option defaults and names.
   */
-#define DICT_MONGODB_DEF_HOST		"localhost"
-#define DICT_MONGODB_DEF_PORT		"27017"
+#define DICT_MONGODB_DEF_URI		"mongodb://localhost:27017"
 #define DICT_MONGODB_DEF_TIMEOUT	1000
 
 /* Private prototypes */
@@ -106,18 +106,8 @@ static void mongodb_parse_config(DICT_MONGODB *dict_mongodb, const char *mongodb
     CFG_PARSER	*p				= dict_mongodb->parser;
 	char		*tmp;
 	
-	dict_mongodb->host			= cfg_get_str(p, "host", "", 0, 0);
+	dict_mongodb->uri			= cfg_get_str(p, "uri", "", 0, 0);
 
-	tmp							= cfg_get_str(p, "port", "", 0, 0);
-	dict_mongodb->port			= atoi(tmp);
-	myfree(tmp);
-
-	tmp							= cfg_get_str(p, "auth", "", 0, 0);
-	dict_mongodb->auth			= atoi(tmp);
-	myfree(tmp);
-
-    dict_mongodb->username		= cfg_get_str(p, "user", "", 0, 0);
-    dict_mongodb->password		= cfg_get_str(p, "password", "", 0, 0);
     dict_mongodb->dbname		= cfg_get_str(p, "dbname", "", 1, 0);
 	dict_mongodb->collection	= cfg_get_str(p, "collection", "", 1, 0);
 	dict_mongodb->key			= cfg_get_str(p, "key", "", 1, 0);
@@ -130,20 +120,20 @@ static void mongodb_parse_config(DICT_MONGODB *dict_mongodb, const char *mongodb
 static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 {
     DICT_MONGODB	*dict_mongodb = (DICT_MONGODB *) dict;
-	bson			query[1];
-	mongo_cursor	cursor[1];
+    bson_t			*query;
+    mongoc_cursor_t	*cursor;
+    const           bson_t *doc;
 	char			*db_coll_str;
 	char			*found			= NULL;
 	int				ret;
-	int				repeat;
 	char			*plus_name		= NULL;
 	
 	/* Check if there is a connection to MongoDB server */
 	if (!dict_mongodb->connected) {
 		// Never successfully connected, so connect now
-		msg_info("connect to mongodb server: %s:%d", dict_mongodb->host, dict_mongodb->port);
+		msg_info("connect to mongodb server: %s", dict_mongodb->uri);
 		if (dict_mongodb_my_connect(dict_mongodb) != DICT_ERR_NONE) {
-			msg_warn("lookup failed: no connection to mongodb server: %s:%d", dict_mongodb->host, dict_mongodb->port);
+			msg_warn("lookup failed: no connection to mongodb server: %s", dict_mongodb->uri);
 			DICT_ERR_VAL_RETURN(dict, DICT_STAT_ERROR, NULL);
 		}
 	}
@@ -160,63 +150,25 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 		strcpy(strchr(plus_name, '+'), strchr(plus_name, '@'));
 	}
 
-	bson_init(query);
+	query = bson_new();
+    BSON_APPEND_UTF8 (query, "hello", "world");
 	if (plus_name == NULL) {
-		bson_append_string(query, dict_mongodb->key, name);
+        BSON_APPEND_UTF8(query, dict_mongodb->key, name);
 	} else {
-		bson_append_string(query, dict_mongodb->key, plus_name);
+        BSON_APPEND_UTF8(query, dict_mongodb->key, plus_name);
 	}
-	bson_finish(query);
 
-	/* Create string like tutorial.persons */
-	db_coll_str	= mymalloc(strlen(dict_mongodb->dbname) + strlen(dict_mongodb->collection) + 2);
-	memcpy(db_coll_str, dict_mongodb->dbname, strlen(dict_mongodb->dbname));
-	db_coll_str[strlen(dict_mongodb->dbname)] = '.';
-	memcpy(db_coll_str + strlen(dict_mongodb->dbname) + 1, dict_mongodb->collection, strlen(dict_mongodb->collection));
-	db_coll_str[strlen(dict_mongodb->dbname) + strlen(dict_mongodb->collection) + 1] = 0;
+    cursor = mongoc_collection_find_with_opts(dict_mongodb->mongo_collection, query, NULL, NULL);
+    if (mongoc_cursor_next(cursor, &doc)) {
+        char *str;
+        // OK
+        str = bson_as_canonical_extended_json (doc, NULL);
+        found = strdup(str);
+        bson_free(str);
+    }
 
-	do {
-		repeat	= 0;
-
-		mongo_cursor_init(cursor, dict_mongodb->conn, db_coll_str);
-		mongo_cursor_set_query(cursor, query);
-
-		ret		= mongo_cursor_next(cursor);
-		if (ret == MONGO_OK) {
-			bson_iterator iterator[1];
-			
-			if (bson_find(iterator, mongo_cursor_bson(cursor), dict_mongodb->value)) {
-				found = bson_iterator_string(iterator);
-				break;
-			}
-		}
-		// ret != MONGO_OK
-		// Did we had a MongoDB connection problem (maybe wrong authentification)
-		if (dict_mongodb->conn->err == MONGO_IO_ERROR) {
-			msg_info("no connection to mongodb server, reconnect to: %s:%d", dict_mongodb->host, dict_mongodb->port);
-
-			// Try to reconnect
-			mongo_reconnect(dict_mongodb->conn);
-
-			if (mongo_check_connection(dict_mongodb->conn) == MONGO_OK && dict_mongodb->conn->err == MONGO_OK) {
-				// Reconnection was successfull
-				dict_mongodb_auth(dict_mongodb);
-				repeat = 1;
-			} else {
-				// Reconnect to MongoDB server failed, reject by soft error
-				msg_warn("reconnect to mongodb server failed: %s:%d", dict_mongodb->host, dict_mongodb->port);
-				myfree(db_coll_str);
-				if (plus_name) {
-					myfree(plus_name);
-				}
-				DICT_ERR_VAL_RETURN(dict, DICT_STAT_FAIL, NULL);
-			}
-		}
-	} while (repeat);
-	
-	bson_destroy( query );
-	mongo_cursor_destroy( cursor );
-	myfree(db_coll_str);
+    bson_destroy(query);
+    mongoc_cursor_destroy(cursor);
 
 	if (plus_name) {
 		myfree(plus_name);
@@ -227,6 +179,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 		dict->error = DICT_STAT_SUCCESS;
 		return found;
 	}
+
 	// Value not found in database
 	DICT_ERR_VAL_RETURN(dict, DICT_STAT_SUCCESS, NULL);
 }
@@ -238,27 +191,20 @@ static void dict_mongodb_close(DICT *dict)
     DICT_MONGODB *dict_mongodb = (DICT_MONGODB *) dict;
 	
     cfg_parser_free(dict_mongodb->parser);
-	myfree(dict_mongodb->host);
-	if (dict_mongodb->auth) {
-		myfree(dict_mongodb->username);
-		myfree(dict_mongodb->password);
-	}
     myfree(dict_mongodb->collection);
     myfree(dict_mongodb->key);
 	mongo_destroy(dict_mongodb->conn);
     dict_free(dict);
-}
 
-/* dict_mongodb_my_connect - connect to mongodb database */
-int		dict_mongodb_auth(DICT_MONGODB *dict_mongodb)
-{
-	if (dict_mongodb->auth) {
-		/* Authentificate to MongoDB server */
-		if (mongo_cmd_authenticate(dict_mongodb->conn, dict_mongodb->dbname, dict_mongodb->username, dict_mongodb->password) == MONGO_ERROR) {
-			msg_fatal("mongodb autentification failed: %s at host %s", dict_mongodb->username, dict_mongodb->host);
-			DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
-		}
-	}
+    /*
+    * Release our handles and clean up libmongoc
+    */
+    mongoc_collection_destroy(dict_mongodb->mongo_collection);
+    mongoc_database_destroy(dict_mongodb->mongo_database);
+    mongoc_uri_destroy(dict_mongodb->mongo_uri);
+    mongoc_client_destroy(dict_mongodb->client);
+    mongoc_cleanup();
+
 }
 
 /* dict_mongodb_my_connect - connect to mongodb database */
@@ -268,30 +214,40 @@ int		dict_mongodb_my_connect(DICT_MONGODB *dict_mongodb)
      * Connect to mongodb database
      */
 	int status;
+    bson_error_t error;
 	
 	dict_mongodb->connected = 0;
-	status = mongo_client(dict_mongodb->conn , dict_mongodb->host, dict_mongodb->port);
-	if (status != MONGO_OK) {
-		switch ( dict_mongodb->conn->err ) {
-			case MONGO_CONN_NO_SOCKET:
-				msg_warn("connect to mongodb database failed: %s at port %d: no socket", dict_mongodb->host, dict_mongodb->port);
-				break;
-			case MONGO_CONN_FAIL:
-				msg_warn("connect to mongodb database failed: %s at port %d", dict_mongodb->host, dict_mongodb->port);
-				break;
-			case MONGO_CONN_NOT_MASTER:
-				msg_warn("connect to mongodb database failed: %s at port %d: not master", dict_mongodb->host, dict_mongodb->port);
-				break;
-		}
-		DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
-	}
-	/* Set timeout of 1000 ms */
-	mongo_set_op_timeout(dict_mongodb->conn, DICT_MONGODB_DEF_TIMEOUT);
 
-	/* authentificate */
-	dict_mongodb_auth(dict_mongodb);
-	
+    /*
+    * Required to initialize libmongoc's internals
+    */
+    mongoc_init();
+
+    /*
+    * Safely create a MongoDB URI object from the given string
+    */
+    dict_mongodb->mongo_uri = mongoc_uri_new_with_error(dict_mongodb->uri, &error);
+    if (!uri) {
+        msg_warn("failed to parse URI: %s error message: %s", dict_mongodb->uri, error.message);
+        DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
+        return;
+    }
+
+    /*
+    * Create a new client instance
+    */
+    dict_mongodb->client = mongoc_client_new_from_uri(dict_mongodb->uri);
+    if (!client) {
+        msg_warn("connect to mongodb database failed");
+        DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_RETRY, DICT_ERR_RETRY);
+        return;
+    }
+
+    dict_mongodb->mongo_database = mongoc_client_get_database(dict_mongodb->client, dict_mongodb->dbname);
+    dict_mongodb->mongo_collection = mongoc_client_get_collection(dict_mongodb->client, dict_mongodb->collection);
+
 	dict_mongodb->connected = 1;
+
 	DICT_ERR_VAL_RETURN(&dict_mongodb->dict, DICT_ERR_NONE, DICT_ERR_NONE);
 }
 
