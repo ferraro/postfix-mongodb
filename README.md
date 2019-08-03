@@ -79,11 +79,11 @@ Installation
 
 2. Install C compiler and development environment
 
-        apt-get install make gcc libc-dev libdb-dev libssl-dev libglib2.0-dev
+        apt-get install make gcc libc-dev libdb-dev libssl-dev libglib2.0-dev cmake libssl-dev libsasl2-dev
 
 3. Install MongoDB libraries at Ubuntu 13:
 
-        apt-get install libmongo-client-dev libbson-dev libmongoc-1.0-0 libbson-1.0
+        apt-get install libbson-1.0 libbson-dev libmongoc-1.0-0 libmongoc-dev
 
 4. Compile this postfix source code, on Ubuntu Linux you need to run:
 

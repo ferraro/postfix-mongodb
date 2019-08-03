@@ -68,7 +68,7 @@
 
 /* Application-specific. */
 
-#include <mongo-client/mongo.h>
+#include <mongoc/mongoc.h>
 #include "dict_mongodb.h"
 
  /*
