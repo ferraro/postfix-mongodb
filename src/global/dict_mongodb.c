@@ -62,9 +62,10 @@
 
 #include "cfg_parser.h"
 
-#define MONGO_HAVE_STDINT	1
-#define MONGO_HAVE_UNISTD	1
-#define MONGO_USE__INT64	1
+/*
+ * SLMs.
+ */
+#define STR(x)	vstring_str(x)
 
 /* Application-specific. */
 
