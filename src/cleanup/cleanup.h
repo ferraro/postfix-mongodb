@@ -61,7 +61,10 @@ typedef struct CLEANUP_STATE {
     char   *orig_rcpt;			/* original recipient address */
     char   *return_receipt;		/* return-receipt address */
     char   *errors_to;			/* errors-to address */
+    ARGV   *auto_hdrs;			/* MTA's own header(s) */
+    ARGV   *hbc_rcpt;			/* header/body checks BCC addresses */
     int     flags;			/* processing options, status flags */
+    int     tflags;			/* User- or MTA-requested tracing */
     int     qmgr_opts;			/* qmgr processing options */
     int     errs;			/* any badness experienced */
     int     err_mask;			/* allowed badness */
@@ -109,11 +112,14 @@ typedef struct CLEANUP_STATE {
     const char *client_addr;		/* real or ersatz client */
     int     client_af;			/* real or ersatz client */
     const char *client_port;		/* real or ersatz client */
+    const char *server_addr;		/* real or ersatz server */
+    const char *server_port;		/* real or ersatz server */
     VSTRING *milter_ext_from;		/* externalized sender */
     VSTRING *milter_ext_rcpt;		/* externalized recipient */
     VSTRING *milter_err_text;		/* milter call-back reply */
     HBC_CHECKS *milter_hbc_checks;	/* Milter header checks */
     VSTRING *milter_hbc_reply;		/* Milter header checks reply */
+    VSTRING *milter_dsn_buf;		/* Milter DSN parsing buffer */
 
     /*
      * Support for Milter body replacement requests.
@@ -121,6 +127,11 @@ typedef struct CLEANUP_STATE {
     struct CLEANUP_REGION *free_regions;/* unused regions */
     struct CLEANUP_REGION *body_regions;/* regions with body content */
     struct CLEANUP_REGION *curr_body_region;
+
+    /*
+     * Internationalization.
+     */
+    int     smtputf8;			/* what support is desired */
 } CLEANUP_STATE;
 
  /*
@@ -207,10 +218,10 @@ extern void cleanup_all(void);
 extern void cleanup_sig(int);
 extern void cleanup_pre_jail(char *, char **);
 extern void cleanup_post_jail(char *, char **);
-extern CONFIG_INT_TABLE cleanup_int_table[];
-extern CONFIG_BOOL_TABLE cleanup_bool_table[];
-extern CONFIG_STR_TABLE cleanup_str_table[];
-extern CONFIG_TIME_TABLE cleanup_time_table[];
+extern const CONFIG_INT_TABLE cleanup_int_table[];
+extern const CONFIG_BOOL_TABLE cleanup_bool_table[];
+extern const CONFIG_STR_TABLE cleanup_str_table[];
+extern const CONFIG_TIME_TABLE cleanup_time_table[];
 
 #define CLEANUP_RECORD(s, t, b, l)	((s)->action((s), (t), (b), (l)))
 
@@ -282,7 +293,7 @@ extern void cleanup_out_recipient(CLEANUP_STATE *, const char *, int, const char
  /*
   * cleanup_addr.c.
   */
-extern void cleanup_addr_sender(CLEANUP_STATE *, const char *);
+extern off_t cleanup_addr_sender(CLEANUP_STATE *, const char *);
 extern void cleanup_addr_recipient(CLEANUP_STATE *, const char *);
 extern void cleanup_addr_bcc_dsn(CLEANUP_STATE *, const char *, const char *, int);
 
@@ -338,6 +349,13 @@ extern int cleanup_body_edit_write(CLEANUP_STATE *, int, VSTRING *);
 extern int cleanup_body_edit_finish(CLEANUP_STATE *);
 extern void cleanup_body_edit_free(CLEANUP_STATE *);
 
+ /*
+  * From: header formatting.
+  */
+#define HFROM_FORMAT_CODE_STD	0
+#define HFROM_FORMAT_CODE_OBS	1
+extern int hfrom_format_code;
+
 /* LICENSE
 /* .ad
 /* .fi
@@ -347,4 +365,9 @@ extern void cleanup_body_edit_free(CLEANUP_STATE *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/

@@ -23,12 +23,12 @@
 /*	\fB$remote_header_rewrite_domain\fR to incomplete
 /*	addresses. Otherwise the result is identical to that of
 /*	the \fBlocal\fR address rewriting context. This prevents
-/*      Postfix from appending the local domain to spam from poorly
+/*	Postfix from appending the local domain to spam from poorly
 /*	written remote clients.
 /* .RE
 /* .IP "\fBresolve \fIsender\fR \fIaddress\fR"
 /*	Resolve the address to a (\fItransport\fR, \fInexthop\fR,
-/*      \fIrecipient\fR, \fIflags\fR) quadruple. The meaning of
+/*	\fIrecipient\fR, \fIflags\fR) quadruple. The meaning of
 /*	the results is as follows:
 /* .RS
 /* .IP \fItransport\fR
@@ -67,7 +67,8 @@
 /*	By default, this daemon does not talk to remote or local users.
 /*	It can run at a fixed low privilege in a chrooted environment.
 /* DIAGNOSTICS
-/*	Problems and transactions are logged to \fBsyslogd\fR(8).
+/*	Problems and transactions are logged to \fBsyslogd\fR(8)
+/*	or \fBpostlogd\fR(8).
 /* CONFIGURATION PARAMETERS
 /* .ad
 /* .fi
@@ -83,10 +84,14 @@
 /* .IP "\fBresolve_dequoted_address (yes)\fR"
 /*	Resolve a recipient address safely instead of correctly, by
 /*	looking inside quotes.
+/* .PP
+/*	Available with Postfix version 2.1 and later:
 /* .IP "\fBresolve_null_domain (no)\fR"
 /*	Resolve an address that ends in the "@" null domain as if the
 /*	local hostname were specified, instead of rejecting the address as
 /*	invalid.
+/* .PP
+/*	Available with Postfix version 2.3 and later:
 /* .IP "\fBresolve_numeric_domain (no)\fR"
 /*	Resolve "user@ipaddress" as "user@[ipaddress]", instead of
 /*	rejecting the address as invalid.
@@ -106,11 +111,13 @@
 /* .IP "\fBappend_at_myorigin (yes)\fR"
 /*	With locally submitted mail, append the string "@$myorigin" to mail
 /*	addresses without domain information.
-/* .IP "\fBappend_dot_mydomain (yes)\fR"
+/* .IP "\fBappend_dot_mydomain (Postfix >= 3.0: no, Postfix < 3.0: yes)\fR"
 /*	With locally submitted mail, append the string ".$mydomain" to
 /*	addresses that have no ".domain" information.
 /* .IP "\fBrecipient_delimiter (empty)\fR"
-/*	The separator between user names and address extensions (user+foo).
+/*	The set of characters that can separate a user name from its
+/*	extension (example: user+foo), or a .forward file name from its
+/*	extension (example: .forward+foo).
 /* .IP "\fBswap_bangpath (yes)\fR"
 /*	Enable the rewriting of "site!user" into "user@site".
 /* .PP
@@ -142,8 +149,9 @@
 /*	$proxy_interfaces, $virtual_alias_domains, $virtual_mailbox_domains,
 /*	or $relay_domains.
 /* .IP "\fBparent_domain_matches_subdomains (see 'postconf -d' output)\fR"
-/*	What Postfix features match subdomains of "domain.tld" automatically,
-/*	instead of requiring an explicit ".domain.tld" pattern.
+/*	A list of Postfix features where the pattern "example.com" also
+/*	matches subdomains of example.com,
+/*	instead of requiring an explicit ".example.com" pattern.
 /* .IP "\fBrelayhost (empty)\fR"
 /*	The next-hop destination of non-local mail; overrides non-local
 /*	domains in recipient addresses.
@@ -241,18 +249,23 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* .PP
 /*	Available in Postfix version 2.0 and later:
 /* .IP "\fBhelpful_warnings (yes)\fR"
 /*	Log warnings about problematic configuration settings, and provide
 /*	helpful suggestions.
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* SEE ALSO
 /*	postconf(5), configuration parameters
 /*	transport(5), transport table format
 /*	relocated(5), format of the "user has moved" table
 /*	master(8), process manager
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README FILES
 /* .ad
@@ -272,6 +285,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -472,7 +490,7 @@ static void rewrite_service(VSTREAM *stream, char *unused_service, char **argv)
      * handled by the common code in multi_server.c.
      */
     if (attr_scan(stream, ATTR_FLAG_STRICT | ATTR_FLAG_MORE,
-		  ATTR_TYPE_STR, MAIL_ATTR_REQ, command,
+		  RECV_ATTR_STR(MAIL_ATTR_REQ, command),
 		  ATTR_TYPE_END) == 1) {
 	if (strcmp(vstring_str(command), REWRITE_ADDR) == 0) {
 	    status = rewrite_proto(stream);
@@ -504,7 +522,7 @@ static void pre_accept(char *unused_name, char **unused_argv)
 
 #endif
 
-static void check_table_stats(int unused_event, char *unused_context)
+static void check_table_stats(int unused_event, void *unused_context)
 {
     const char *table;
 
@@ -512,7 +530,7 @@ static void check_table_stats(int unused_event, char *unused_context)
 	msg_info("table %s has changed -- restarting", table);
 	exit(0);
     }
-    event_request_timer(check_table_stats, (char *) 0, 10);
+    event_request_timer(check_table_stats, (void *) 0, 10);
 }
 
 /* pre_jail_init - initialize before entering chroot jail */
@@ -535,25 +553,25 @@ static void pre_jail_init(char *unused_name, char **unused_argv)
 	    maps_create(resolve_regular.snd_relay_maps_name,
 			RES_PARAM_VALUE(resolve_regular.snd_relay_maps),
 			DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
-			| DICT_FLAG_NO_REGSUB);
+			| DICT_FLAG_NO_REGSUB | DICT_FLAG_UTF8_REQUEST);
     if (*RES_PARAM_VALUE(resolve_verify.snd_relay_maps))
 	resolve_verify.snd_relay_info =
 	    maps_create(resolve_verify.snd_relay_maps_name,
 			RES_PARAM_VALUE(resolve_verify.snd_relay_maps),
 			DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
-			| DICT_FLAG_NO_REGSUB);
+			| DICT_FLAG_NO_REGSUB | DICT_FLAG_UTF8_REQUEST);
     if (*RES_PARAM_VALUE(resolve_regular.snd_def_xp_maps))
 	resolve_regular.snd_def_xp_info =
 	    maps_create(resolve_regular.snd_def_xp_maps_name,
 			RES_PARAM_VALUE(resolve_regular.snd_def_xp_maps),
 			DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
-			| DICT_FLAG_NO_REGSUB);
+			| DICT_FLAG_NO_REGSUB | DICT_FLAG_UTF8_REQUEST);
     if (*RES_PARAM_VALUE(resolve_verify.snd_def_xp_maps))
 	resolve_verify.snd_def_xp_info =
 	    maps_create(resolve_verify.snd_def_xp_maps_name,
 			RES_PARAM_VALUE(resolve_verify.snd_def_xp_maps),
 			DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
-			| DICT_FLAG_NO_REGSUB);
+			| DICT_FLAG_NO_REGSUB | DICT_FLAG_UTF8_REQUEST);
 }
 
 /* post_jail_init - initialize after entering chroot jail */
@@ -564,7 +582,7 @@ static void post_jail_init(char *unused_name, char **unused_argv)
 	transport_post_init(resolve_regular.transport_info);
     if (resolve_verify.transport_info)
 	transport_post_init(resolve_verify.transport_info);
-    check_table_stats(0, (char *) 0);
+    check_table_stats(0, (void *) 0);
 }
 
 MAIL_VERSION_STAMP_DECLARE;
@@ -602,7 +620,6 @@ int     main(int argc, char **argv)
     };
     static const CONFIG_BOOL_TABLE bool_table[] = {
 	VAR_SWAP_BANGPATH, DEF_SWAP_BANGPATH, &var_swap_bangpath,
-	VAR_APP_DOT_MYDOMAIN, DEF_APP_DOT_MYDOMAIN, &var_append_dot_mydomain,
 	VAR_APP_AT_MYORIGIN, DEF_APP_AT_MYORIGIN, &var_append_at_myorigin,
 	VAR_PERCENT_HACK, DEF_PERCENT_HACK, &var_percent_hack,
 	VAR_RESOLVE_DEQUOTED, DEF_RESOLVE_DEQUOTED, &var_resolve_dequoted,
@@ -612,6 +629,10 @@ int     main(int argc, char **argv)
 	VAR_ALLOW_MIN_USER, DEF_ALLOW_MIN_USER, &var_allow_min_user,
 	0,
     };
+    static const CONFIG_NBOOL_TABLE nbool_table[] = {
+	VAR_APP_DOT_MYDOMAIN, DEF_APP_DOT_MYDOMAIN, &var_append_dot_mydomain,
+	0,
+    };
 
     /*
      * Fingerprint executables and core dumps.
@@ -619,12 +640,13 @@ int     main(int argc, char **argv)
     MAIL_VERSION_STAMP_ALLOCATE;
 
     multi_server_main(argc, argv, rewrite_service,
-		      MAIL_SERVER_STR_TABLE, str_table,
-		      MAIL_SERVER_BOOL_TABLE, bool_table,
-		      MAIL_SERVER_PRE_INIT, pre_jail_init,
-		      MAIL_SERVER_POST_INIT, post_jail_init,
+		      CA_MAIL_SERVER_STR_TABLE(str_table),
+		      CA_MAIL_SERVER_BOOL_TABLE(bool_table),
+		      CA_MAIL_SERVER_NBOOL_TABLE(nbool_table),
+		      CA_MAIL_SERVER_PRE_INIT(pre_jail_init),
+		      CA_MAIL_SERVER_POST_INIT(post_jail_init),
 #ifdef CHECK_TABLE_STATS_BEFORE_ACCEPT
-		      MAIL_SERVER_PRE_ACCEPT, pre_accept,
+		      CA_MAIL_SERVER_PRE_ACCEPT(pre_accept),
 #endif
 		      0);
 }

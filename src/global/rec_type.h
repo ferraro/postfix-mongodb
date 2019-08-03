@@ -68,7 +68,7 @@
 #define REC_TYPE_VERP	'V'		/* VERP delimiters */
 
 #define REC_TYPE_DSN_RET	'<'	/* DSN full/hdrs */
-#define REC_TYPE_DSN_ENVID	'i'	/* DSN full/hdrs */
+#define REC_TYPE_DSN_ENVID	'i'	/* DSN envelope id */
 #define REC_TYPE_DSN_ORCPT	'o'	/* DSN orig rcpt address */
 #define REC_TYPE_DSN_NOTIFY	'n'	/* DSN notify flags */
 
@@ -124,17 +124,18 @@
   * 
   * See also: REC_TYPE_PTR_FORMAT below.
   */
-#define REC_TYPE_SIZE_FORMAT	"%15ld %15ld %15ld %15ld %15ld"
+#define REC_TYPE_SIZE_FORMAT	"%15ld %15ld %15ld %15ld %15ld %15ld"
 #define REC_TYPE_SIZE_CAST1	long	/* Vmailer extra offs - data offs */
 #define REC_TYPE_SIZE_CAST2	long	/* Postfix 1.0 data offset */
 #define REC_TYPE_SIZE_CAST3	long	/* Postfix 1.0 recipient count */
 #define REC_TYPE_SIZE_CAST4	long	/* Postfix 2.1 qmgr flags */
 #define REC_TYPE_SIZE_CAST5	long	/* Postfix 2.4 content length */
+#define REC_TYPE_SIZE_CAST6	long	/* Postfix 3.0 smtputf8 flags */
 
  /*
   * The warn record specifies when the next warning that the message was
   * deferred should be sent.  It is updated in place by qmgr, so changing
-  * this value when there are deferred mesages in the queue is dangerous!
+  * this value when there are deferred messages in the queue is dangerous!
   */
 #define REC_TYPE_WARN_FORMAT	"%15ld"	/* warning time format */
 #define REC_TYPE_WARN_ARG(tv)	((long) (tv))

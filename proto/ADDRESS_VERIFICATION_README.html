@@ -75,9 +75,9 @@ verification probes</a>
 <h2><a name="how">How address verification works</a></h2>
 
 <p> A Postfix MTA verifies a sender or recipient address by probing
-the nearest
-MTA for that address, without actually delivering mail. The nearest
-MTA could be the Postfix MTA itself, or it could be a remote MTA
+the preferred MTAs
+for that address, without actually delivering mail. The preferred
+MTAs could include the Postfix MTA itself, or some remote MTAs
 (SMTP
 interruptus).  Probe messages are like normal mail, except that
 they are never delivered, deferred or bounced; probe messages are
@@ -95,14 +95,14 @@ always discarded.  </p>
     <td rowspan="3" align="center" valign="bottom"> <tt> -&gt; </tt>
     </td>
 
-	<td rowspan="3" align="center" valign="middle"> probe<br>
-	message </td>
+        <td rowspan="3" align="center" valign="middle"> probe<br>
+        message </td>
 
     <td rowspan="3" align="center" valign="middle"> <tt> -&gt; </tt>
     </td>
 
-	<td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
-	Postfix<br> mail<br> queue </td>
+        <td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
+        Postfix<br> mail<br> queue </td>
 
 </tr>
 
@@ -115,15 +115,15 @@ always discarded.  </p>
     <td rowspan="3" align="center" valign="middle"> <tt> -&gt; </tt>
     </td>
 
-	<td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
-	<a href="smtpd.8.html">Postfix<br> SMTP<br> server</a> </td>
+        <td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
+        <a href="smtpd.8.html">Postfix<br> SMTP<br> server</a> </td>
 
     <td rowspan="3" align="center" valign="middle"> <tt> &lt;-&gt;
     </tt> </td>
 
-	<td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
-	<a href="verify.8.html">Postfix<br> verify<br> server</a>
-	</td>
+        <td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
+        <a href="verify.8.html">Postfix<br> verify<br> server</a>
+        </td>
 
 </tr>
 
@@ -141,14 +141,14 @@ always discarded.  </p>
     <td rowspan="3" align="center" valign="top"> <tt> &lt;- </tt>
     </td>
 
-	<td rowspan="3" align="center" valign="middle"> probe<br>
-	status </td>
+        <td rowspan="3" align="center" valign="middle"> probe<br>
+        status </td>
 
     <td rowspan="3" align="center" valign="middle"> <tt> &lt;- </tt>
     </td>
 
-	<td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
-	Postfix<br> delivery<br> agents </td>
+        <td rowspan="3" bgcolor="#f0f0ff" align="center" valign="middle">
+        Postfix<br> delivery<br> agents </td>
 
     <td rowspan="3" align="left" valign="middle"> <tt>-&gt;</tt>
     Local<br> <tt>-&gt;</tt> Remote</td>
@@ -160,8 +160,8 @@ always discarded.  </p>
     <td rowspan="3" colspan="4" align="center" valign="middle">
     &nbsp; </td>
 
-	<td rowspan="3" align="center" valign="middle"> <tt>
-	^</tt><br> <tt> |</tt><br> <tt> v</tt> </td>
+        <td rowspan="3" align="center" valign="middle"> <tt>
+        ^</tt><br> <tt> |</tt><br> <tt> v</tt> </td>
 
 </tr>
 
@@ -173,8 +173,8 @@ always discarded.  </p>
 
     <td colspan="4" align="center" valign="middle"> &nbsp; </td>
 
-	<td bgcolor="#f0f0ff" align="center" valign="middle">
-	Address<br> verification<br> database </td>
+        <td bgcolor="#f0f0ff" align="center" valign="middle">
+        Address<br> verification<br> database </td>
 
 </tr>
 
@@ -198,12 +198,18 @@ details. </p>
 
 <ul>
 
-<li> <p> When verifying a remote address, Postfix probes the nearest
-MTA for that address, without actually delivering mail to it. If
-the nearest MTA accepts the address, then Postfix assumes that the
+<li> <p> Postfix assumes that a remote SMTP server will reject
+unknown addresses in reply to the RCPT TO command. However, some
+sites report this in reply to the DATA command. For such sites
+you may configure a workaround with the smtp_address_verify_target
+parameter (Postfix 3.0 and later). </p>
+
+<li> <p> When verifying a remote address, Postfix probes the preferred
+MTAs for that address, without actually delivering mail. If
+a preferred MTA accepts the address, then Postfix assumes that the
 address is deliverable. In reality, mail for a remote address can
-bounce AFTER the nearest MTA accepts the recipient address, or AFTER
-the nearest MTA accepts the message content. </p>
+bounce AFTER a preferred MTA accepts the recipient address, or AFTER
+a preferred MTA accepts the message content. </p>
 
 <li> <p> Some sites may blacklist you when you are probing them
 too often (a probe is an SMTP session that does not deliver mail),
@@ -219,16 +225,16 @@ the routing of address verification probes"</a>, for how to override
 mail routing and for possible limitations when you have to do this.
 </p>
 
-<li> <p> Postfix assumes that an address is undeliverable when the
-nearest MTA for the address rejects the probe, regardless of the
+<li> <p> Postfix assumes that an address is undeliverable when a
+preferred MTA for the address rejects the probe, regardless of the
 reason for rejection (client rejected, HELO rejected, MAIL FROM
-rejected, etc.).  Thus, Postfix rejects an address when the nearest
+rejected, etc.).  Thus, Postfix rejects an address when a preferred
 MTA for that address rejects mail from your machine for any reason.
 This is not a limitation, but it is mentioned here just in case
 people believe that it is a limitation. </p>
 
-<li> <p> Unfortunately, some sites do not reject
-unknown addresses in reply to the RCPT TO command, but report a
+<li> <p> Unfortunately, some sites do not reject unknown addresses
+in reply to the RCPT TO or DATA command, but instead report a
 delivery failure in response to end of DATA after a message is
 transferred.  Postfix address verification does not work with such
 sites. </p>
@@ -282,6 +288,9 @@ the same address repeatedly.  </p>
 /etc/postfix/main.cf:
     smtpd_recipient_restrictions = 
         permit_mynetworks
+        # reject_unauth_destination is not needed here if the mail
+        # relay policy is specified under smtpd_relay_restrictions
+        # (available with Postfix 2.10 and later).
         reject_unauth_destination
         ...
         reject_unknown_recipient_domain
@@ -289,6 +298,12 @@ the same address repeatedly.  </p>
         ...
     # Postfix 2.6 and later privacy feature.
     # unverified_recipient_reject_reason = Address lookup failed
+
+    # Postfix 3.2 and earlier workaround.
+    # Do not set enable_original_recipient=no. This prevents Postfix
+    # from saving the recipient address verification result under
+    # the original address, when the address verification probe
+    # message goes through address aliasing or canonical mapping.
 </pre>
 </blockquote>
 
@@ -337,8 +352,14 @@ in forged email.  </p>
 
     # Default setting for Postfix 2.7 and later.
     # Note 1: Be sure to read the "<a href="#caching">Caching</a>" section below!
-    # Note 2: Avoid hash files here. Use btree instead.
+    # Note 2: Avoid hash files here. Use btree or lmdb instead.
     address_verify_map = btree:/var/lib/postfix/verify
+
+    # Postfix 3.2 and earlier workaround.
+    # Do not set enable_original_recipient=no. This prevents Postfix
+    # from saving the sender address verification result under the
+    # original address, when the address verification probe message
+    # goes through address aliasing or canonical mapping.
  
 /etc/postfix/sender_access:
     # Don't do this when you handle lots of email.
@@ -384,7 +405,7 @@ you can see what mail would be blocked: </p>
 
     # Default setting for Postfix 2.7 and later.
     # Note 1: Be sure to read the "<a href="#caching">Caching</a>" section below!
-    # Note 2: Avoid hash files here. Use btree instead.
+    # Note 2: Avoid hash files here. Use btree or lmdb instead.
     address_verify_map = btree:/var/lib/postfix/verify
 </pre>
 </blockquote>
@@ -431,7 +452,7 @@ verification probe fails with some temporary error. Specify a valid
 
 <p> The unverified_sender_reject_reason parameter (default:
 empty) specifies fixed text that Postfix will send to remote SMTP
-clients, instead of sending actual addres verification details.
+clients, instead of sending actual address verification details.
 Do not specify the SMTP status code or enhanced status code.  </p>
 
 <p> The unverified_sender_tempfail_action parameter (default:
@@ -451,23 +472,35 @@ results are lost after "postfix reload" or "postfix stop". </p>
 
 <blockquote>
 <pre>
+# Example 1: Default setting for Postfix 2.7 and later.
+# Note: avoid hash files here. Use btree or lmdb instead.
 /etc/postfix/main.cf:
-    # Default setting for Postfix 2.7 and later.
-    # Note: avoid hash files here. Use btree instead.
     address_verify_map = btree:$data_directory/verify_cache
 
-    # Shared persistent cache (requires Postfix 2.9 or later).  
-    address_verify_map = proxy:btree:$data_directory/verify_cache
-    # Disable automatic cache cleanup in all Postfix instances except
-    # for one instance that will be responsible for cache cleanup.
+# Example 2: Shared persistent lmdb: cache (Postfix 2.11 or later).  
+# Disable automatic cache cleanup in all Postfix instances except
+# for one instance that will be responsible for cache cleanup.
+/etc/postfix/main.cf:
+    address_verify_map = lmdb:$data_directory/verify_cache
     # address_verify_cache_cleanup_interval = 0
 
-    # Shared memory cache (requires Postfix 2.9 or later).
-    # See memcache_table(5) for details.
-    address_verify_map = memcache:/etc/postfix/verify-memcache.cf
+# Example 3: Shared persistent btree: cache (Postfix 2.9 or later).  
+# Disable automatic cache cleanup in all Postfix instances except
+# for one instance that will be responsible for cache cleanup.
+/etc/postfix/main.cf:
+    address_verify_map = proxy:btree:$data_directory/verify_cache
+    # address_verify_cache_cleanup_interval = 0
 
-    # Default setting for Postfix 2.6 and earlier.
-    # This uses non-persistent storage only.
+# Example 4: Shared memory cache (requires Postfix 2.9 or later).
+# Disable automatic cache cleanup in all Postfix instances.
+# See memcache_table(5) for details.
+/etc/postfix/main.cf:
+    address_verify_map = memcache:/etc/postfix/verify-memcache.cf
+    address_verify_cache_cleanup_interval = 0
+
+# Example 5: Default setting for Postfix 2.6 and earlier.
+# This uses non-persistent storage only.
+/etc/postfix/main.cf:
     address_verify_map =
 </pre>
 </blockquote>

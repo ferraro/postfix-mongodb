@@ -19,6 +19,10 @@
 /*	VSTRING	*xtext_unquote(unquoted, quoted)
 /*	VSTRING	*unquoted;
 /*	const char *quoted;
+/*
+/*	VSTRING	*xtext_unquote_append(unquoted, quoted)
+/*	VSTRING	*unquoted;
+/*	const char *quoted;
 /* DESCRIPTION
 /*	xtext_quote() takes a null-terminated string and replaces characters
 /*	+, <33(10) and >126(10), as well as characters specified with "special"
@@ -31,6 +35,9 @@
 /*	understands lowercase, uppercase, and mixed case +XX sequences. The
 /*	result value is the unquoted argument in case of success, a null pointer
 /*	otherwise.
+/*
+/*	xtext_unquote_append() is like xtext_unquote(), but appends
+/*	the conversion result to the result buffer.
 /* BUGS
 /*	This module cannot process null characters in data.
 /* LICENSE
@@ -42,6 +49,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -90,15 +102,14 @@ VSTRING *xtext_quote(VSTRING *quoted, const char *unquoted, const char *special)
     return (quoted);
 }
 
-/* xtext_unquote - quoted data to unquoted */
+/* xtext_unquote_append - quoted data to unquoted */
 
-VSTRING *xtext_unquote(VSTRING *unquoted, const char *quoted)
+VSTRING *xtext_unquote_append(VSTRING *unquoted, const char *quoted)
 {
-    const char *cp;
+    const unsigned char *cp;
     int     ch;
 
-    VSTRING_RESET(unquoted);
-    for (cp = quoted; (ch = *cp) != 0; cp++) {
+    for (cp = (const unsigned char *) quoted; (ch = *cp) != 0; cp++) {
 	if (ch == '+') {
 	    if (ISDIGIT(cp[1]))
 		ch = (cp[1] - '0') << 4;
@@ -123,6 +134,13 @@ VSTRING *xtext_unquote(VSTRING *unquoted, const char *quoted)
     VSTRING_TERMINATE(unquoted);
     return (unquoted);
 }
+/* xtext_unquote - quoted data to unquoted */
+
+VSTRING *xtext_unquote(VSTRING *unquoted, const char *quoted)
+{
+    VSTRING_RESET(unquoted);
+    return (xtext_unquote_append(unquoted, quoted) ? unquoted : 0);
+}
 
 #ifdef TEST
 
@@ -137,9 +155,7 @@ static ssize_t read_buf(VSTREAM *fp, VSTRING *buf)
 {
     ssize_t len;
 
-    VSTRING_RESET(buf);
-    len = vstream_fread(fp, STR(buf), vstring_avail(buf));
-    VSTRING_AT_OFFSET(buf, len);		/* XXX */
+    len = vstream_fread_buf(fp, buf, BUFLEN);
     VSTRING_TERMINATE(buf);
     return (len);
 }
@@ -150,6 +166,17 @@ int     main(int unused_argc, char **unused_argv)
     VSTRING *quoted = vstring_alloc(100);
     ssize_t len;
 
+    /*
+     * Negative tests.
+     */
+    if (xtext_unquote(unquoted, "++1") != 0)
+	msg_warn("undetected error pattern 1");
+    if (xtext_unquote(unquoted, "+2+") != 0)
+	msg_warn("undetected error pattern 2");
+
+    /*
+     * Positive tests.
+     */
     while ((len = read_buf(VSTREAM_IN, unquoted)) > 0) {
 	xtext_quote(quoted, STR(unquoted), "+=");
 	if (xtext_unquote(unquoted, STR(quoted)) == 0)

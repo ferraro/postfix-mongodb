@@ -114,7 +114,7 @@ SMTP_SASL_AUTH_CACHE *smtp_sasl_auth_cache_init(const char *map, int ttl)
     /*
      * Sanity checks.
      */
-#define HAS_MULTIPLE_VALUES(s) ((s)[strcspn((s),  ", \t\r\n")] != 0)
+#define HAS_MULTIPLE_VALUES(s) ((s)[strcspn((s),  CHARS_COMMA_SP)] != 0)
 
     if (*map == 0)
 	msg_panic("%s: empty SASL authentication cache name", myname);
@@ -128,10 +128,10 @@ SMTP_SASL_AUTH_CACHE *smtp_sasl_auth_cache_init(const char *map, int ttl)
      * XXX To avoid multiple writers the map needs to be maintained by the
      * proxywrite service. We would like to have a DICT_FLAG_REQ_PROXY flag
      * so that the library can enforce this, but that requires moving the
-     * dict_proxy module one level down in the build dependency hierachy.
+     * dict_proxy module one level down in the build dependency hierarchy.
      */
 #define CACHE_DICT_OPEN_FLAGS \
-	(DICT_FLAG_DUP_REPLACE | DICT_FLAG_SYNC_UPDATE)
+	(DICT_FLAG_DUP_REPLACE | DICT_FLAG_SYNC_UPDATE | DICT_FLAG_UTF8_REQUEST)
 #define PROXY_COLON	DICT_TYPE_PROXY ":"
 #define PROXY_COLON_LEN	(sizeof(PROXY_COLON) - 1)
 
@@ -230,11 +230,12 @@ static int smtp_sasl_auth_cache_valid_value(SMTP_SASL_AUTH_CACHE *auth_cache,
 int     smtp_sasl_auth_cache_find(SMTP_SASL_AUTH_CACHE *auth_cache,
 				          const SMTP_SESSION *session)
 {
+    SMTP_ITERATOR *iter = session->iterator;
     char   *key;
     const char *entry;
     int     valid = 0;
 
-    key = smtp_sasl_auth_cache_make_key(session->host, session->sasl_username);
+    key = smtp_sasl_auth_cache_make_key(STR(iter->host), session->sasl_username);
     if ((entry = dict_get(auth_cache->dict, key)) != 0)
 	if ((valid = smtp_sasl_auth_cache_valid_value(auth_cache, entry,
 						session->sasl_passwd)) == 0)
@@ -255,10 +256,11 @@ void    smtp_sasl_auth_cache_store(SMTP_SASL_AUTH_CACHE *auth_cache,
 				           const SMTP_SESSION *session,
 				           const SMTP_RESP *resp)
 {
+    SMTP_ITERATOR *iter = session->iterator;
     char   *key;
     char   *value;
 
-    key = smtp_sasl_auth_cache_make_key(session->host, session->sasl_username);
+    key = smtp_sasl_auth_cache_make_key(STR(iter->host), session->sasl_username);
     value = smtp_sasl_auth_cache_make_value(session->sasl_passwd,
 					    resp->dsn, resp->str);
     dict_put(auth_cache->dict, key, value);

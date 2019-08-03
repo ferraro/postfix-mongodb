@@ -56,7 +56,7 @@
 /*	int	rec_pad(stream, type, len)
 /*	VSTREAM *stream;
 /*	int	type;
-/*	int	len;
+/*	ssize_t	len;
 /*
 /*	REC_SPACE_NEED(buflen, reclen)
 /*	ssize_t	buflen;
@@ -137,6 +137,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -177,6 +182,7 @@ int     rec_put_type(VSTREAM *stream, int type, off_t offset)
 
     if (vstream_fseek(stream, offset, SEEK_SET) < 0
 	|| VSTREAM_PUTC(type, stream) != type) {
+	msg_warn("%s: seek or write error", VSTREAM_PATH(stream));
 	return (REC_TYPE_ERROR);
     } else {
 	return (type);
@@ -281,14 +287,11 @@ int     rec_get_raw(VSTREAM *stream, VSTRING *buf, ssize_t maxsize, int flags)
 	 * Reserve buffer space for the result, and read the record data into
 	 * the buffer.
 	 */
-	VSTRING_RESET(buf);
-	VSTRING_SPACE(buf, len);
-	if (vstream_fread(stream, vstring_str(buf), len) != len) {
+	if (vstream_fread_buf(stream, buf, len) != len) {
 	    msg_warn("%s: unexpected EOF in data, record type %d length %ld",
 		     VSTREAM_PATH(stream), type, (long) len);
 	    return (REC_TYPE_ERROR);
 	}
-	VSTRING_AT_OFFSET(buf, len);
 	VSTRING_TERMINATE(buf);
 	if (msg_verbose > 2)
 	    msg_info("%s: type %c len %ld data %.10s", myname,
@@ -304,8 +307,12 @@ int     rec_get_raw(VSTREAM *stream, VSTRING *buf, ssize_t maxsize, int flags)
 	    continue;
 	if (type == REC_TYPE_DTXT && (flags & REC_FLAG_SKIP_DTXT) != 0)
 	    continue;
-	if (type == REC_TYPE_END && (flags & REC_FLAG_SEEK_END) != 0)
-	    (void) vstream_fseek(stream, (off_t) 0, SEEK_END);
+	if (type == REC_TYPE_END && (flags & REC_FLAG_SEEK_END) != 0
+	    && vstream_fseek(stream, (off_t) 0, SEEK_END) < 0) {
+	    msg_warn("%s: seek error after reading END record: %m",
+		     VSTREAM_PATH(stream));
+	    return (REC_TYPE_ERROR);
+	}
 	break;
     }
     return (type);
@@ -398,7 +405,7 @@ int     rec_fputs(VSTREAM *stream, int type, const char *str)
 
 /* rec_pad - write padding record */
 
-int     rec_pad(VSTREAM *stream, int type, int len)
+int     rec_pad(VSTREAM *stream, int type, ssize_t len)
 {
     int     width = len - 2;		/* type + length */
 

@@ -13,7 +13,7 @@
   * External interface.
   */
 extern void smtpd_check_init(void);
-extern int smtpd_check_addr(const char *);
+extern int smtpd_check_addr(const char *, const char *, int);
 extern char *smtpd_check_rewrite(SMTPD_STATE *);
 extern char *smtpd_check_client(SMTPD_STATE *);
 extern char *smtpd_check_helo(SMTPD_STATE *, char *);
@@ -35,4 +35,9 @@ extern char *smtpd_check_policy(SMTPD_STATE *, char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/

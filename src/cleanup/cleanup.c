@@ -21,6 +21,9 @@
 /*	This task is delegated to the \fBtrivial-rewrite\fR(8) daemon.
 /* .IP \(bu
 /*	Eliminate duplicate envelope recipient addresses.
+/* .IP \(bu
+/*	Remove message headers: \fBBcc\fR, \fBContent-Length\fR,
+/*	\fBResent-Bcc\fR, \fBReturn-Path\fR.
 /* .PP
 /*	The following address transformations are optional:
 /* .IP \(bu
@@ -51,7 +54,8 @@
 /*	RFC 3464 (Delivery status notifications)
 /*	RFC 5322 (Internet Message Format)
 /* DIAGNOSTICS
-/*	Problems and transactions are logged to \fBsyslogd\fR(8).
+/*	Problems and transactions are logged to \fBsyslogd\fR(8)
+/*	or \fBpostlogd\fR(8).
 /* BUGS
 /*	Table-driven rewriting rules make it hard to express \fBif then
 /*	else\fR and other logical relationships.
@@ -88,6 +92,11 @@
 /*	Available in Postfix version 2.9 and later:
 /* .IP "\fBenable_long_queue_ids (no)\fR"
 /*	Enable long, non-repeating, queue IDs (queue file names).
+/* .PP
+/*	Available in Postfix version 3.0 and later:
+/* .IP "\fBmessage_drop_headers (bcc, content-length, resent-bcc, return-path)\fR"
+/*	Names of message headers that the \fBcleanup\fR(8) daemon will remove
+/*	after applying \fBheader_checks\fR(5) and before invoking Milter applications.
 /* BUILT-IN CONTENT FILTERING CONTROLS
 /* .ad
 /* .fi
@@ -181,6 +190,12 @@
 /* .IP "\fBmilter_header_checks (empty)\fR"
 /*	Optional lookup tables for content inspection of message headers
 /*	that are produced by Milter applications.
+/* .PP
+/*	Available in Postfix version 3.1 and later:
+/* .IP "\fBmilter_macro_defaults (empty)\fR"
+/*	Optional list of \fIname=value\fR pairs that specify default
+/*	values for arbitrary macros that Postfix may send to Milter
+/*	applications.
 /* MIME PROCESSING CONTROLS
 /* .ad
 /* .fi
@@ -246,7 +261,7 @@
 /*	off in email addresses.
 /* .IP "\fBmasquerade_exceptions (empty)\fR"
 /*	Optional list of user names that are not subjected to address
-/*	masquerading, even when their address matches $masquerade_domains.
+/*	masquerading, even when their addresses match $masquerade_domains.
 /* .IP "\fBpropagate_unmatched_extensions (canonical, virtual)\fR"
 /*	What address lookup tables copy an address extension from the lookup
 /*	key to the lookup result.
@@ -312,6 +327,26 @@
 /*	from each original recipient.
 /* .IP "\fBvirtual_alias_recursion_limit (1000)\fR"
 /*	The maximal nesting depth of virtual alias expansion.
+/* .PP
+/*	Available in Postfix version 3.0 and later:
+/* .IP "\fBvirtual_alias_address_length_limit (1000)\fR"
+/*	The maximal length of an email address after virtual alias expansion.
+/* SMTPUTF8 CONTROLS
+/* .ad
+/* .fi
+/*	Preliminary SMTPUTF8 support is introduced with Postfix 3.0.
+/* .IP "\fBsmtputf8_enable (yes)\fR"
+/*	Enable preliminary SMTPUTF8 support for the protocols described
+/*	in RFC 6531..6533.
+/* .IP "\fBsmtputf8_autodetect_classes (sendmail, verify)\fR"
+/*	Detect that a message requires SMTPUTF8 support for the specified
+/*	mail origin classes.
+/* .PP
+/*	Available in Postfix version 3.2 and later:
+/* .IP "\fBenable_idna2003_compatibility (no)\fR"
+/*	Enable 'transitional' compatibility between IDNA2003 and IDNA2008,
+/*	when converting UTF-8 domain names to/from the ASCII form that is
+/*	used for DNS lookups.
 /* MISCELLANEOUS CONTROLS
 /* .ad
 /* .fi
@@ -325,8 +360,8 @@
 /*	The maximal number of digits after the decimal point when logging
 /*	sub-second delay values.
 /* .IP "\fBdelay_warning_time (0h)\fR"
-/*	The time after which the sender receives the message headers of
-/*	mail that is still queued.
+/*	The time after which the sender receives a copy of the message
+/*	headers of mail that is still queued.
 /* .IP "\fBipc_timeout (3600s)\fR"
 /*	The time limit for sending or receiving information over an internal
 /*	communication channel.
@@ -353,12 +388,18 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* .PP
 /*	Available in Postfix version 2.1 and later:
 /* .IP "\fBenable_original_recipient (yes)\fR"
-/*	Enable support for the X-Original-To message header.
+/*	Enable support for the original recipient address after an
+/*	address is rewritten to a different address (for example with
+/*	aliasing or with canonical mapping).
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* FILES
 /*	/etc/postfix/canonical*, canonical mapping table
 /*	/etc/postfix/virtual*, virtual mapping table
@@ -372,6 +413,7 @@
 /*	postconf(5), configuration parameters
 /*	master(5), generic daemon options
 /*	master(8), process manager
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README FILES
 /* .ad
@@ -391,6 +433,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -451,10 +498,10 @@ static void cleanup_service(VSTREAM *src, char *unused_service, char **argv)
      * about the whole operation.
      */
     attr_print(src, ATTR_FLAG_NONE,
-	       ATTR_TYPE_STR, MAIL_ATTR_QUEUEID, state->queue_id,
+	       SEND_ATTR_STR(MAIL_ATTR_QUEUEID, state->queue_id),
 	       ATTR_TYPE_END);
     if (attr_scan(src, ATTR_FLAG_STRICT,
-		  ATTR_TYPE_INT, MAIL_ATTR_FLAGS, &flags,
+		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &flags),
 		  ATTR_TYPE_END) != 1) {
 	state->errs |= CLEANUP_STAT_BAD;
 	flags = 0;
@@ -490,7 +537,7 @@ static void cleanup_service(VSTREAM *src, char *unused_service, char **argv)
      */
     if (CLEANUP_OUT_OK(state) == 0 && type > 0) {
 	while (type != REC_TYPE_END
-	       && (type = rec_get(src, buf, 0)) > 0) {
+	       && (type = rec_get_raw(src, buf, 0, REC_FLAG_NONE)) > 0) {
 	    if (type == REC_TYPE_MILT_COUNT) {
 		int     milter_count = atoi(vstring_str(buf));
 
@@ -513,11 +560,11 @@ static void cleanup_service(VSTREAM *src, char *unused_service, char **argv)
      */
     status = cleanup_flush(state);		/* in case state is modified */
     attr_print(src, ATTR_FLAG_NONE,
-	       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
-	       ATTR_TYPE_STR, MAIL_ATTR_WHY,
-	       (state->flags & CLEANUP_FLAG_SMTP_REPLY)
-	       && state->smtp_reply ? state->smtp_reply :
-	       state->reason ? state->reason : "",
+	       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+	       SEND_ATTR_STR(MAIL_ATTR_WHY,
+			     (state->flags & CLEANUP_FLAG_SMTP_REPLY)
+			     && state->smtp_reply ? state->smtp_reply :
+			     state->reason ? state->reason : ""),
 	       ATTR_TYPE_END);
     cleanup_free(state);
 
@@ -562,14 +609,14 @@ int     main(int argc, char **argv)
      * Pass control to the single-threaded service skeleton.
      */
     single_server_main(argc, argv, cleanup_service,
-		       MAIL_SERVER_INT_TABLE, cleanup_int_table,
-		       MAIL_SERVER_BOOL_TABLE, cleanup_bool_table,
-		       MAIL_SERVER_STR_TABLE, cleanup_str_table,
-		       MAIL_SERVER_TIME_TABLE, cleanup_time_table,
-		       MAIL_SERVER_PRE_INIT, cleanup_pre_jail,
-		       MAIL_SERVER_POST_INIT, cleanup_post_jail,
-		       MAIL_SERVER_PRE_ACCEPT, pre_accept,
-		       MAIL_SERVER_IN_FLOW_DELAY,
-		       MAIL_SERVER_UNLIMITED,
+		       CA_MAIL_SERVER_INT_TABLE(cleanup_int_table),
+		       CA_MAIL_SERVER_BOOL_TABLE(cleanup_bool_table),
+		       CA_MAIL_SERVER_STR_TABLE(cleanup_str_table),
+		       CA_MAIL_SERVER_TIME_TABLE(cleanup_time_table),
+		       CA_MAIL_SERVER_PRE_INIT(cleanup_pre_jail),
+		       CA_MAIL_SERVER_POST_INIT(cleanup_post_jail),
+		       CA_MAIL_SERVER_PRE_ACCEPT(pre_accept),
+		       CA_MAIL_SERVER_IN_FLOW_DELAY,
+		       CA_MAIL_SERVER_UNLIMITED,
 		       0);
 }

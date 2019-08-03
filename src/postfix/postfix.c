@@ -31,6 +31,17 @@
 /* .IP \fBstart\fR
 /*	Start the Postfix mail system. This also runs the configuration
 /*	check described above.
+/* .IP \fBstart-fg\fR
+/*	Like \fBstart\fR, but keep the \fBmaster\fR(8) daemon running
+/*	in the foreground, and enable \fBmaster\fR(8) "init" mode
+/*	when running as PID 1.
+/*	This command requires that multi-instance support is
+/*	disabled (i.e. the multi_instance_directories parameter
+/*	value must be empty). When running Postfix inside a container,
+/*	mount the container host's /dev/log socket inside the
+/*	container (example: "docker run -v /dev/log:/dev/log ...")
+/*	and specify a distinct Postfix "syslog_name" prefix that
+/*	identifies logging from the Postfix instance.
 /* .IP \fBstop\fR
 /*	Stop the Postfix mail system in an orderly fashion. If
 /*	possible, running processes are allowed to terminate at
@@ -54,7 +65,7 @@
 /*	earliest convenience.
 /* .IP \fBstatus\fR
 /*	Indicate if the Postfix mail system is currently running.
-/* .IP "\fBset-permissions\fR \fB[\fIname\fR=\fIvalue ...\fB]\fR
+/* .IP "\fBset-permissions\fR [\fIname\fR=\fIvalue ...\fR]"
 /*	Set the ownership and permissions of Postfix related files and
 /*	directories, as specified in the \fBpostfix-files\fR file.
 /* .sp
@@ -66,7 +77,21 @@
 /*	This feature is available in Postfix 2.1 and later.  With
 /*	Postfix 2.0 and earlier, use "\fB$config_directory/post-install
 /*	set-permissions\fR".
-/* .IP "\fBupgrade-configuration\fR \fB[\fIname\fR=\fIvalue ...\fB]\fR
+/* .IP "\fBlogrotate\fR"
+/*	Rotate the logfile specified with $maillog_file, by appending
+/*	a time-stamp suffix that is formatted according to
+/*	$maillog_file_rotate_suffix, and by compressing the file
+/*	with the command specified with $maillog_file_compressor.
+/*	This will not rotate /dev/* files.
+/* .sp
+/*	This feature is available in Postfix 3.4 and later.
+/* .IP "\fBtls\fR \fIsubcommand\fR"
+/*	Enable opportunistic TLS in the Postfix SMTP client or
+/*	server, and manage Postfix SMTP server TLS private keys and
+/*	certificates.  See postfix-tls(1) for documentation.
+/* .sp
+/*	This feature is available in Postfix 3.1 and later.
+/* .IP "\fBupgrade-configuration\fR [\fIname\fR=\fIvalue ...\fR]"
 /*	Update the \fBmain.cf\fR and \fBmaster.cf\fR files with information
 /*	that Postfix needs in order to run: add or update services, and add
 /*	or update configuration parameter settings.
@@ -111,61 +136,83 @@
 /*	This is set when the -v command-line option is present.
 /* .IP \fBMAIL_DEBUG\fR
 /*	This is set when the -D command-line option is present.
+/* .PP
+/*	When the internal logging service is enabled (by setting a
+/*	non-empty maillog_file parameter value) the postfix(1)
+/*	command exports settings that are used by child processes
+/*	before they have processed main.cf or command-line settings.
+/* .IP \fBPOSTLOG_SERVICE
+/*	The name of the public postlog service endpoint.
+/* .IP \fBPOSTLOG_HOSTNAME
+/*	The hostname to prepend to internal logging.
 /* CONFIGURATION PARAMETERS
 /* .ad
 /* .fi
 /*	The following \fBmain.cf\fR configuration parameters are
 /*	exported as environment variables with the same names:
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
 /* .IP "\fBcommand_directory (see 'postconf -d' output)\fR"
 /*	The location of all postfix administrative commands.
 /* .IP "\fBdaemon_directory (see 'postconf -d' output)\fR"
 /*	The directory with Postfix support programs and daemon programs.
-/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
-/*	The default location of the Postfix main.cf and master.cf
-/*	configuration files.
-/* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
-/*	The location of the Postfix top-level queue directory.
-/* .IP "\fBmail_owner (postfix)\fR"
-/*	The UNIX system account that owns the Postfix queue and most Postfix
-/*	daemon processes.
-/* .IP "\fBsetgid_group (postdrop)\fR"
-/*	The group ownership of set-gid Postfix commands and of group-writable
-/*	Postfix directories.
-/* .IP "\fBsendmail_path (see 'postconf -d' output)\fR"
-/*	A Sendmail compatibility feature that specifies the location of
-/*	the Postfix \fBsendmail\fR(1) command.
-/* .IP "\fBnewaliases_path (see 'postconf -d' output)\fR"
-/*	Sendmail compatibility feature that specifies the location of the
-/*	\fBnewaliases\fR(1) command.
-/* .IP "\fBmailq_path (see 'postconf -d' output)\fR"
-/*	Sendmail compatibility feature that specifies where the Postfix
-/*	\fBmailq\fR(1) command is installed.
 /* .IP "\fBhtml_directory (see 'postconf -d' output)\fR"
 /*	The location of Postfix HTML files that describe how to build,
 /*	configure or operate a specific Postfix subsystem or feature.
+/* .IP "\fBmail_owner (postfix)\fR"
+/*	The UNIX system account that owns the Postfix queue and most Postfix
+/*	daemon processes.
+/* .IP "\fBmailq_path (see 'postconf -d' output)\fR"
+/*	Sendmail compatibility feature that specifies where the Postfix
+/*	\fBmailq\fR(1) command is installed.
 /* .IP "\fBmanpage_directory (see 'postconf -d' output)\fR"
 /*	Where the Postfix manual pages are installed.
+/* .IP "\fBnewaliases_path (see 'postconf -d' output)\fR"
+/*	Sendmail compatibility feature that specifies the location of the
+/*	\fBnewaliases\fR(1) command.
+/* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
+/*	The location of the Postfix top-level queue directory.
 /* .IP "\fBreadme_directory (see 'postconf -d' output)\fR"
 /*	The location of Postfix README files that describe how to build,
 /*	configure or operate a specific Postfix subsystem or feature.
+/* .IP "\fBsendmail_path (see 'postconf -d' output)\fR"
+/*	A Sendmail compatibility feature that specifies the location of
+/*	the Postfix \fBsendmail\fR(1) command.
+/* .IP "\fBsetgid_group (postdrop)\fR"
+/*	The group ownership of set-gid Postfix commands and of group-writable
+/*	Postfix directories.
 /* .PP
 /*	Available in Postfix version 2.5 and later:
 /* .IP "\fBdata_directory (see 'postconf -d' output)\fR"
 /*	The directory with Postfix-writable data files (for example:
 /*	caches, pseudo-random numbers).
 /* .PP
+/*	Available in Postfix version 3.0 and later:
+/* .IP "\fBmeta_directory (see 'postconf -d' output)\fR"
+/*	The location of non-executable files that are shared among
+/*	multiple Postfix instances, such as postfix-files, dynamicmaps.cf,
+/*	and the multi-instance template files main.cf.proto and master.cf.proto.
+/* .IP "\fBshlib_directory (see 'postconf -d' output)\fR"
+/*	The location of Postfix dynamically-linked libraries
+/*	(libpostfix-*.so), and the default location of Postfix database
+/*	plugins (postfix-*.so) that have a relative pathname in the
+/*	dynamicmaps.cf file.
+/* .PP
+/*	Available in Postfix version 3.1 and later:
+/* .IP "\fBopenssl_path (openssl)\fR"
+/*	The location of the OpenSSL command line program \fBopenssl\fR(1).
+/* .PP
 /*	Other configuration parameters:
-/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
-/*	The default location of the Postfix main.cf and master.cf
-/*	configuration files.
 /* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
-/*	The list of environment parameters that a Postfix process will
-/*	import from a non-Postfix parent process.
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* .PP
 /*	Available in Postfix version 2.6 and later:
 /* .IP "\fBmulti_instance_directories (empty)\fR"
@@ -185,6 +232,21 @@
 /* .IP "\fBmulti_instance_enable (no)\fR"
 /*	Allow this Postfix instance to be started, stopped, etc., by a
 /*	multi-instance manager.
+/* .PP
+/*	Available in Postfix version 3.4 and later:
+/* .IP "\fBmaillog_file (empty)\fR"
+/*	The name of an optional logfile that is written by the Postfix
+/*	\fBpostlogd\fR(8) service.
+/* .IP "\fBmaillog_file_compressor (gzip)\fR"
+/*	The program to run after rotating $maillog_file with "postfix
+/*	logrotate".
+/* .IP "\fBmaillog_file_prefixes (/var, /dev/stdout)\fR"
+/*	A list of allowed prefixes for a maillog_file value.
+/* .IP "\fBmaillog_file_rotate_suffix (%Y%M%d-%H%M%S)\fR"
+/*	The format of the suffix to append to $maillog_file while rotating
+/*	the file with "postfix logrotate".
+/* .IP "\fBpostlog_service_name (postlog)\fR"
+/*	The name of the \fBpostlogd\fR(8) service entry in master.cf.
 /* FILES
 /* .ad
 /* .fi
@@ -204,12 +266,14 @@
 /*	$daemon_directory/postfix-files, file/directory permissions
 /*	$daemon_directory/postfix-script, administrative commands
 /*	$daemon_directory/post-install, post-installation configuration
+/*	$daemon_directory/dynamicmaps.cf, plug-in database clients
 /* SEE ALSO
 /*	Commands:
 /*	postalias(1), create/update/query alias database
 /*	postcat(1), examine Postfix queue file
 /*	postconf(1), Postfix configuration utility
 /*	postfix(1), Postfix control program
+/*	postfix-tls(1), Postfix TLS management
 /*	postkick(1), trigger Postfix daemon
 /*	postlock(1), Postfix-compatible locking
 /*	postlog(1), Postfix-compatible logging
@@ -240,12 +304,14 @@
 /*	Table lookup mechanisms:
 /*	cidr_table(5), Associate CIDR pattern with value
 /*	ldap_table(5), Postfix LDAP client
+/*	lmdb_table(5), Postfix LMDB database driver
 /*	memcache_table(5), Postfix memcache client
 /*	mysql_table(5), Postfix MYSQL client
 /*	nisplus_table(5), Postfix NIS+ client
 /*	pcre_table(5), Associate PCRE pattern with value
 /*	pgsql_table(5), Postfix PostgreSQL client
 /*	regexp_table(5), Associate POSIX regexp pattern with value
+/*	socketmap_table(5), Postfix socketmap client
 /*	sqlite_table(5), Postfix SQLite database driver
 /*	tcp_table(5), Postfix client-server table lookup
 /*
@@ -262,6 +328,7 @@
 /*	oqmgr(8), old Postfix queue manager
 /*	pickup(8), Postfix local mail pickup
 /*	pipe(8), deliver mail to non-Postfix command
+/*	postlogd(8), Postfix internal logging service
 /*	postscreen(8), Postfix zombie blocker
 /*	proxymap(8), Postfix lookup table proxy server
 /*	qmgr(8), Postfix queue manager
@@ -302,6 +369,11 @@
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
 /*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
+/*
 /*	TLS support by:
 /*	Lutz Jaenicke
 /*	Brandenburg University of Technology
@@ -341,7 +413,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
-#include <syslog.h>
 #ifdef USE_PATHS_H
 #include <paths.h>
 #endif
@@ -350,7 +421,6 @@
 
 #include <msg.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <stringops.h>
 #include <clean_env.h>
 #include <argv.h>
@@ -362,6 +432,8 @@
 #include <mail_conf.h>
 #include <mail_params.h>
 #include <mail_version.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Additional installation parameters. */
 
@@ -436,7 +508,7 @@ int     main(int argc, char **argv)
 	argv[0] = slash + 1;
     if (isatty(STDERR_FILENO))
 	msg_vstream_init(argv[0], VSTREAM_ERR);
-    msg_syslog_init(argv[0], LOG_PID, LOG_FACILITY);
+    maillog_client_init(argv[0], MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*
      * Check the Postfix library version as soon as we enable logging.
@@ -491,18 +563,39 @@ int     main(int argc, char **argv)
      * because some shell scripts use environment settings to override
      * main.cf settings.
      */
-    import_env = argv_split(var_import_environ, ", \t\r\n");
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
     clean_env(import_env->argv);
     argv_free(import_env);
 
+    /*
+     * This is after calling clean_env(), to ensure that POSTLOG_XXX exports
+     * will work, even if import_environment would remove them.
+     */
+    maillog_client_init(argv[0], MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
+
+    /*
+     * Alert the sysadmin that the backwards-compatible settings are still in
+     * effect.
+     */
+    if (var_compat_level < CUR_COMPAT_LEVEL) {
+	msg_info("Postfix is running with backwards-compatible default "
+		 "settings");
+	msg_info("See http://www.postfix.org/COMPATIBILITY_README.html "
+		 "for details");
+	msg_info("To disable backwards compatibility use \"postconf "
+		 VAR_COMPAT_LEVEL "=%d\" and \"postfix reload\"",
+		 CUR_COMPAT_LEVEL);
+    }
     check_setenv("PATH", ROOT_PATH);		/* sys_defs.h */
     check_setenv(CONF_ENV_PATH, var_config_dir);/* mail_conf.h */
 
     check_setenv(VAR_COMMAND_DIR, var_command_dir);	/* main.cf */
     check_setenv(VAR_DAEMON_DIR, var_daemon_dir);	/* main.cf */
     check_setenv(VAR_DATA_DIR, var_data_dir);	/* main.cf */
+    check_setenv(VAR_META_DIR, var_meta_dir);	/* main.cf */
     check_setenv(VAR_QUEUE_DIR, var_queue_dir);	/* main.cf */
     check_setenv(VAR_CONFIG_DIR, var_config_dir);	/* main.cf */
+    check_setenv(VAR_SHLIB_DIR, var_shlib_dir);	/* main.cf */
 
     /*
      * Do we want to keep adding things here as shell scripts evolve?
@@ -532,7 +625,7 @@ int     main(int argc, char **argv)
      * Run the management script.
      */
     if (force_single_instance
-	|| argv_split(var_multi_conf_dirs, "\t\r\n, ")->argc == 0) {
+	|| argv_split(var_multi_conf_dirs, CHARS_COMMA_SP)->argc == 0) {
 	script = concatenate(var_daemon_dir, "/postfix-script", (char *) 0);
 	if (optind < 1)
 	    msg_panic("bad optind value");
@@ -548,7 +641,7 @@ int     main(int argc, char **argv)
 	if (*var_multi_wrapper == 0)
 	    msg_fatal("multi-instance support is requested, but %s is empty",
 		      VAR_MULTI_WRAPPER);
-	my_argv = argv_split(var_multi_wrapper, " \t\r\n");
+	my_argv = argv_split(var_multi_wrapper, CHARS_SPACE);
 	do {
 	    argv_add(my_argv, argv[optind], (char *) 0);
 	} while (argv[optind++] != 0);

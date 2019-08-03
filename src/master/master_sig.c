@@ -33,6 +33,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System libraries. */
@@ -157,7 +162,7 @@ static void master_sigchld(int unused_sig)
 
 /* master_sig_event - called upon return from select() */
 
-static void master_sig_event(int unused_event, char *unused_context)
+static void master_sig_event(int unused_event, void *unused_context)
 {
     char    c[1];
 
@@ -198,6 +203,15 @@ static void master_sigdeath(int sig)
      * for usage by signal handlers that terminate the process.
      */
     msg_info("terminating on signal %d", sig);
+
+    /*
+     * Undocumented: when a process runs with PID 1, Linux won't deliver a
+     * signal unless the process specifies a handler (i.e. SIG_DFL is treated
+     * as SIG_IGN).
+     */
+    if (init_mode)
+	/* Don't call exit() from a signal handler. */
+	_exit(0);
 
     /*
      * Deliver the signal to ourselves and clean up. XXX We're running as a
@@ -241,7 +255,7 @@ void    master_sigsetup(void)
     non_blocking(SIG_PIPE_READ_FD, NON_BLOCKING);
     close_on_exec(SIG_PIPE_WRITE_FD, CLOSE_ON_EXEC);
     close_on_exec(SIG_PIPE_READ_FD, CLOSE_ON_EXEC);
-    event_enable_read(SIG_PIPE_READ_FD, master_sig_event, (char *) 0);
+    event_enable_read(SIG_PIPE_READ_FD, master_sig_event, (void *) 0);
 #endif
 
     /*

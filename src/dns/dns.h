@@ -54,6 +54,60 @@
 
 #endif
 
+/*
+ * Disable DNSSEC at compile-time even if RES_USE_DNSSEC is available
+ */
+#ifdef NO_DNSSEC
+#undef RES_USE_DNSSEC
+#endif
+
+ /*
+  * Compatibility with systems that lack RES_USE_DNSSEC and RES_USE_EDNS0
+  */
+#ifndef RES_USE_DNSSEC
+#define RES_USE_DNSSEC	0
+#endif
+#ifndef RES_USE_EDNS0
+#define RES_USE_EDNS0	0
+#endif
+
+ /*-
+  * TLSA: https://tools.ietf.org/html/rfc6698#section-7.1
+  * RRSIG: http://tools.ietf.org/html/rfc4034#section-3
+  *
+  * We don't request RRSIG, but we get it "for free" when we send the DO-bit.
+  */
+#ifndef T_TLSA
+#define T_TLSA		52
+#endif
+#ifndef T_RRSIG
+#define T_RRSIG		46		/* Avoid unknown RR in logs */
+#endif
+#ifndef T_DNAME
+#define T_DNAME		39		/* [RFC6672] */
+#endif
+
+ /*
+  * https://tools.ietf.org/html/rfc6698#section-7.2
+  */
+#define DNS_TLSA_USAGE_CA_CONSTRAINT			0
+#define DNS_TLSA_USAGE_SERVICE_CERTIFICATE_CONSTRAINT	1
+#define DNS_TLSA_USAGE_TRUST_ANCHOR_ASSERTION		2
+#define DNS_TLSA_USAGE_DOMAIN_ISSUED_CERTIFICATE	3
+
+ /*
+  * https://tools.ietf.org/html/rfc6698#section-7.3
+  */
+#define DNS_TLSA_SELECTOR_FULL_CERTIFICATE	0
+#define DNS_TLSA_SELECTOR_SUBJECTPUBLICKEYINFO	1
+
+ /*
+  * https://tools.ietf.org/html/rfc6698#section-7.4
+  */
+#define DNS_TLSA_MATCHING_TYPE_NO_HASH_USED	0
+#define DNS_TLSA_MATCHING_TYPE_SHA256		1
+#define DNS_TLSA_MATCHING_TYPE_SHA512		2
+
  /*
   * SunOS 4 needs this.
   */
@@ -88,6 +142,7 @@ typedef struct DNS_RR {
     unsigned short type;		/* T_A, T_CNAME, etc. */
     unsigned short class;		/* C_IN, etc. */
     unsigned int ttl;			/* always */
+    unsigned int dnssec_valid;		/* DNSSEC validated */
     unsigned short pref;		/* T_MX only */
     struct DNS_RR *next;		/* linkage */
     size_t  data_len;			/* actual data size */
@@ -104,6 +159,11 @@ extern const char *dns_strerror(unsigned);
   */
 extern const char *dns_strtype(unsigned);
 extern unsigned dns_type(const char *);
+
+ /*
+  * dns_strrecord.c
+  */
+extern char *dns_strrecord(VSTRING *, DNS_RR *);
 
  /*
   * dns_rr.c
@@ -159,35 +219,91 @@ extern int dns_rr_eq_sa(DNS_RR *, struct sockaddr *);
  /*
   * dns_lookup.c
   */
-extern int dns_lookup(const char *, unsigned, unsigned, DNS_RR **,
-		              VSTRING *, VSTRING *);
-extern int dns_lookup_l(const char *, unsigned, DNS_RR **, VSTRING *,
-			        VSTRING *, int,...);
-extern int dns_lookup_v(const char *, unsigned, DNS_RR **, VSTRING *,
-			        VSTRING *, int, unsigned *);
+extern int dns_lookup_x(const char *, unsigned, unsigned, DNS_RR **,
+			        VSTRING *, VSTRING *, int *, unsigned);
+extern int dns_lookup_rl(const char *, unsigned, DNS_RR **, VSTRING *,
+			         VSTRING *, int *, int,...);
+extern int dns_lookup_rv(const char *, unsigned, DNS_RR **, VSTRING *,
+			         VSTRING *, int *, int, unsigned *);
+
+#define dns_lookup(name, type, rflags, list, fqdn, why) \
+    dns_lookup_x((name), (type), (rflags), (list), (fqdn), (why), (int *) 0, \
+	(unsigned) 0)
+#define dns_lookup_r(name, type, rflags, list, fqdn, why, rcode) \
+    dns_lookup_x((name), (type), (rflags), (list), (fqdn), (why), (rcode), \
+	(unsigned) 0)
+#define dns_lookup_l(name, rflags, list, fqdn, why, lflags, ...) \
+    dns_lookup_rl((name), (rflags), (list), (fqdn), (why), (int *) 0, \
+	(lflags), __VA_ARGS__)
+#define dns_lookup_v(name, rflags, list, fqdn, why, lflags, ltype) \
+    dns_lookup_rv((name), (rflags), (list), (fqdn), (why), (int *) 0, \
+	(lflags), (ltype))
 
  /*
   * Request flags.
   */
 #define DNS_REQ_FLAG_STOP_OK	(1<<0)
 #define DNS_REQ_FLAG_STOP_INVAL	(1<<1)
+#define DNS_REQ_FLAG_STOP_NULLMX (1<<2)
+#define DNS_REQ_FLAG_STOP_MX_POLICY (1<<3)
+#define DNS_REQ_FLAG_NCACHE_TTL	(1<<4)
 #define DNS_REQ_FLAG_NONE	(0)
 
  /*
   * Status codes. Failures must have negative codes so they will not collide
   * with valid counts of answer records etc.
+  * 
+  * When a function queries multiple record types for one name, it issues one
+  * query for each query record type. Each query returns a (status, rcode,
+  * text). Only one of these (status, rcode, text) will be returned to the
+  * caller. The selection is based on the status code precedence.
+  * 
+  * - Return DNS_OK (and the corresponding rcode) as long as any query returned
+  * DNS_OK. If this is changed, then code needs to be added to prevent memory
+  * leaks.
+  * 
+  * - Return DNS_RETRY (and the corresponding rcode and text) instead of any
+  * hard negative result.
+  * 
+  * - Return DNS_NOTFOUND (and the corresponding rcode and text) only when all
+  * queries returned DNS_NOTFOUND.
+  * 
+  * DNS_POLICY ranks higher than DNS_RETRY because there was a DNS_OK result,
+  * but the reply filter dropped it. This is a very soft error.
+  * 
+  * Below is the precedence order. The order between DNS_RETRY and DNS_NOTFOUND
+  * is arbitrary.
   */
-#define DNS_INVAL	(-5)		/* query ok, malformed reply */
+#define DNS_RECURSE	(-7)		/* internal only: recursion needed */
+#define DNS_NOTFOUND	(-6)		/* query ok, data not found */
+#define DNS_NULLMX	(-5)		/* query ok, service unavailable */
 #define DNS_FAIL	(-4)		/* query failed, don't retry */
-#define DNS_NOTFOUND	(-3)		/* query ok, data not found */
+#define DNS_INVAL	(-3)		/* query ok, malformed reply */
 #define DNS_RETRY	(-2)		/* query failed, try again */
-#define DNS_RECURSE	(-1)		/* recursion needed */
+#define DNS_POLICY	(-1)		/* query ok, all records dropped */
 #define DNS_OK		0		/* query succeeded */
 
  /*
   * How long can a DNS name or single text value be?
   */
 #define DNS_NAME_LEN	1024
+
+ /*
+  * dns_rr_filter.c.
+  */
+extern void dns_rr_filter_compile(const char *, const char *);
+
+#ifdef LIBDNS_INTERNAL
+#include <maps.h>
+extern MAPS *dns_rr_filter_maps;
+extern int dns_rr_filter_execute(DNS_RR **);
+
+#endif
+
+ /*
+  * dns_str_resflags.c
+  */
+const char *dns_str_resflags(unsigned long);
 
 /* LICENSE
 /* .ad
@@ -198,6 +314,11 @@ extern int dns_lookup_v(const char *, unsigned, DNS_RR **, VSTRING *,
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

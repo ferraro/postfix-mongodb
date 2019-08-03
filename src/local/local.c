@@ -314,7 +314,8 @@
 /*	RFC 822 (ARPA Internet Text Messages)
 /*	RFC 3463 (Enhanced status codes)
 /* DIAGNOSTICS
-/*	Problems and transactions are logged to \fBsyslogd\fR(8).
+/*	Problems and transactions are logged to \fBsyslogd\fR(8)
+/*	or \fBpostlogd\fR(8).
 /*	Corrupted message files are marked so that the queue
 /*	manager can move them to the \fBcorrupt\fR queue afterwards.
 /*
@@ -361,13 +362,14 @@
 /* .IP "\fBbiff (yes)\fR"
 /*	Whether or not to use the local biff service.
 /* .IP "\fBexpand_owner_alias (no)\fR"
-/*	When delivering to an alias "aliasname" that has an "owner-aliasname"
-/*	companion alias, set the envelope sender address to the expansion
-/*	of the "owner-aliasname" alias.
+/*	When delivering to an alias "\fIaliasname\fR" that has an
+/*	"owner-\fIaliasname\fR" companion alias, set the envelope sender
+/*	address to the expansion of the "owner-\fIaliasname\fR" alias.
 /* .IP "\fBowner_request_special (yes)\fR"
-/*	Give special treatment to owner-listname and listname-request
-/*	address localparts: don't split such addresses when the
-/*	recipient_delimiter is set to "-".
+/*	Enable special treatment for owner-\fIlistname\fR entries in the
+/*	\fBaliases\fR(5) file, and don't split owner-\fIlistname\fR and
+/*	\fIlistname\fR-request address localparts when the recipient_delimiter
+/*	is set to "-".
 /* .IP "\fBsun_mailtool_compatibility (no)\fR"
 /*	Obsolete SUN mailtool compatibility feature.
 /* .PP
@@ -385,6 +387,12 @@
 /*	Reset the \fBlocal\fR(8) delivery agent's idea of the owner-alias
 /*	attribute, when delivering mail to a child alias that does not have
 /*	its own owner alias.
+/* .PP
+/*	Available in Postfix version 3.0 and later:
+/* .IP "\fBlocal_delivery_status_filter ($default_delivery_status_filter)\fR"
+/*	Optional filter for the \fBlocal\fR(8) delivery agent to change the
+/*	status code or explanatory text of successful or unsuccessful
+/*	deliveries.
 /* DELIVERY METHOD CONTROLS
 /* .ad
 /* .fi
@@ -454,6 +462,11 @@
 /*	The maximal number of addresses remembered by the address
 /*	duplicate filter for \fBaliases\fR(5) or \fBvirtual\fR(5) alias expansion, or
 /*	for \fBshowq\fR(8) queue displays.
+/* .IP "\fBmailbox_size_limit (51200000)\fR"
+/*	The maximal size of any \fBlocal\fR(8) individual mailbox or maildir
+/*	file, or zero (no limit).
+/* .PP
+/*	Implemented in the qmgr(8) daemon:
 /* .IP "\fBlocal_destination_concurrency_limit (2)\fR"
 /*	The maximal number of parallel deliveries via the local mail
 /*	delivery transport to the same recipient (when
@@ -463,9 +476,6 @@
 /* .IP "\fBlocal_destination_recipient_limit (1)\fR"
 /*	The maximal number of recipients per message delivery via the
 /*	local mail delivery transport.
-/* .IP "\fBmailbox_size_limit (51200000)\fR"
-/*	The maximal size of any \fBlocal\fR(8) individual mailbox or maildir
-/*	file, or zero (no limit).
 /* SECURITY CONTROLS
 /* .ad
 /* .fi
@@ -531,15 +541,25 @@
 /* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
 /*	The location of the Postfix top-level queue directory.
 /* .IP "\fBrecipient_delimiter (empty)\fR"
-/*	The separator between user names and address extensions (user+foo).
+/*	The set of characters that can separate a user name from its
+/*	extension (example: user+foo), or a .forward file name from its
+/*	extension (example: .forward+foo).
 /* .IP "\fBrequire_home_directory (no)\fR"
 /*	Require that a \fBlocal\fR(8) recipient's home directory exists
 /*	before mail delivery is attempted.
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix version 3.3 and later:
+/* .IP "\fBenable_original_recipient (yes)\fR"
+/*	Enable support for the original recipient address after an
+/*	address is rewritten to a different address (for example with
+/*	aliasing or with canonical mapping).
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* FILES
 /*	The following are examples; details differ between systems.
 /*	$HOME/.forward, per-user aliasing
@@ -553,6 +573,7 @@
 /*	aliases(5), format of alias database
 /*	postconf(5), configuration parameters
 /*	master(5), generic daemon options
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* LICENSE
 /* .ad
@@ -571,6 +592,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -661,6 +687,7 @@ int     local_ext_prop_mask;
 int     local_deliver_hdr_mask;
 int     local_mbox_lock_mask;
 MAPS   *alias_maps;
+char   *var_local_dsn_filter;
 
 /* local_deliver - deliver message with extreme prejudice */
 
@@ -698,6 +725,7 @@ static int local_deliver(DELIVER_REQUEST *rqst, char *service)
     state.msg_attr.fp = rqst->fp;
     state.msg_attr.offset = rqst->data_offset;
     state.msg_attr.encoding = rqst->encoding;
+    state.msg_attr.smtputf8 = rqst->smtputf8;
     state.msg_attr.sender = rqst->sender;
     state.msg_attr.dsn_envid = rqst->dsn_envid;
     state.msg_attr.dsn_ret = rqst->dsn_ret;
@@ -855,7 +883,8 @@ static void pre_init(char *unused_name, char **unused_argv)
     }
     alias_maps = maps_create("aliases", var_alias_maps,
 			     DICT_FLAG_LOCK | DICT_FLAG_PARANOID
-			     | DICT_FLAG_FOLD_FIX);
+			     | DICT_FLAG_FOLD_FIX
+			     | DICT_FLAG_UTF8_REQUEST);
 
     flush_init();
 }
@@ -896,6 +925,7 @@ int     main(int argc, char **argv)
 	VAR_DELIVER_HDR, DEF_DELIVER_HDR, &var_deliver_hdr, 0, 0,
 	VAR_MAILBOX_LOCK, DEF_MAILBOX_LOCK, &var_mailbox_lock, 1, 0,
 	VAR_MAILBOX_CMD_MAPS, DEF_MAILBOX_CMD_MAPS, &var_mailbox_cmd_maps, 0, 0,
+	VAR_LOCAL_DSN_FILTER, DEF_LOCAL_DSN_FILTER, &var_local_dsn_filter, 0, 0,
 	0,
     };
     static const CONFIG_BOOL_TABLE bool_table[] = {
@@ -924,15 +954,17 @@ int     main(int argc, char **argv)
     MAIL_VERSION_STAMP_ALLOCATE;
 
     single_server_main(argc, argv, local_service,
-		       MAIL_SERVER_INT_TABLE, int_table,
-		       MAIL_SERVER_LONG_TABLE, long_table,
-		       MAIL_SERVER_STR_TABLE, str_table,
-		       MAIL_SERVER_RAW_TABLE, raw_table,
-		       MAIL_SERVER_BOOL_TABLE, bool_table,
-		       MAIL_SERVER_TIME_TABLE, time_table,
-		       MAIL_SERVER_PRE_INIT, pre_init,
-		       MAIL_SERVER_POST_INIT, post_init,
-		       MAIL_SERVER_PRE_ACCEPT, pre_accept,
-		       MAIL_SERVER_PRIVILEGED,
+		       CA_MAIL_SERVER_INT_TABLE(int_table),
+		       CA_MAIL_SERVER_LONG_TABLE(long_table),
+		       CA_MAIL_SERVER_STR_TABLE(str_table),
+		       CA_MAIL_SERVER_RAW_TABLE(raw_table),
+		       CA_MAIL_SERVER_BOOL_TABLE(bool_table),
+		       CA_MAIL_SERVER_TIME_TABLE(time_table),
+		       CA_MAIL_SERVER_PRE_INIT(pre_init),
+		       CA_MAIL_SERVER_POST_INIT(post_init),
+		       CA_MAIL_SERVER_PRE_ACCEPT(pre_accept),
+		       CA_MAIL_SERVER_PRIVILEGED,
+		       CA_MAIL_SERVER_BOUNCE_INIT(VAR_LOCAL_DSN_FILTER,
+						  &var_local_dsn_filter),
 		       0);
 }

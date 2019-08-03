@@ -46,6 +46,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -53,6 +58,7 @@
 #include <sys_defs.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 
 /* Utility library. */
 
@@ -74,7 +80,7 @@
 
 /* master_wakeup_timer_event - wakeup event handler */
 
-static void master_wakeup_timer_event(int unused_event, char *context)
+static void master_wakeup_timer_event(int unused_event, void *context)
 {
     const char *myname = "master_wakeup_timer_event";
     MASTER_SERV *serv = (MASTER_SERV *) context;
@@ -105,9 +111,13 @@ static void master_wakeup_timer_event(int unused_event, char *context)
 	case MASTER_SERV_TYPE_UNIX:
 	    status = LOCAL_TRIGGER(serv->name, &wakeup, sizeof(wakeup), BRIEFLY);
 	    break;
+	case MASTER_SERV_TYPE_UXDG:
+	    status = -1;
+	    errno = EOPNOTSUPP;
+	    break;
 #ifdef MASTER_SERV_TYPE_PASS
 	case MASTER_SERV_TYPE_PASS:
-	    status = PASS_TRIGGER(serv->name, &wakeup, sizeof(wakeup), BRIEFLY);
+	    status = pass_trigger(serv->name, &wakeup, sizeof(wakeup), BRIEFLY);
 	    break;
 #endif
 
@@ -146,7 +156,7 @@ static void master_wakeup_timer_event(int unused_event, char *context)
     /*
      * Schedule another wakeup event.
      */
-    event_request_timer(master_wakeup_timer_event, (char *) serv,
+    event_request_timer(master_wakeup_timer_event, (void *) serv,
 			serv->wakeup_time);
 }
 
@@ -161,7 +171,7 @@ void    master_wakeup_init(MASTER_SERV *serv)
     if (msg_verbose)
 	msg_info("%s: service %s time %d",
 		 myname, serv->name, serv->wakeup_time);
-    master_wakeup_timer_event(0, (char *) serv);
+    master_wakeup_timer_event(0, (void *) serv);
 }
 
 /* master_wakeup_cleanup - cancel wakeup timer */
@@ -178,5 +188,5 @@ void    master_wakeup_cleanup(MASTER_SERV *serv)
     if (msg_verbose)
 	msg_info("%s: service %s", myname, serv->name);
 
-    event_cancel_timer(master_wakeup_timer_event, (char *) serv);
+    event_cancel_timer(master_wakeup_timer_event, (void *) serv);
 }

@@ -35,6 +35,11 @@
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
 /*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
+/*
 /*	TLS support originally by:
 /*	Lutz Jaenicke
 /*	BTU Cottbus
@@ -145,7 +150,6 @@ void    smtpd_state_init(SMTPD_STATE *state, VSTREAM *stream,
     state->tls_context = 0;
 #endif
 
-
     /*
      * Minimal initialization to support external authentication (e.g.,
      * XCLIENT) without having to enable SASL in main.cf.
@@ -159,6 +163,7 @@ void    smtpd_state_init(SMTPD_STATE *state, VSTREAM *stream,
 
     state->milter_argv = 0;
     state->milter_argc = 0;
+    state->milters = 0;
 
     /*
      * Initialize peer information.
@@ -177,6 +182,13 @@ void    smtpd_state_init(SMTPD_STATE *state, VSTREAM *stream,
 
     state->ehlo_argv = 0;
     state->ehlo_buf = 0;
+
+    /*
+     * BDAT.
+     */
+    state->bdat_state = SMTPD_BDAT_STAT_NONE;
+    state->bdat_get_stream = 0;
+    state->bdat_get_buffer = 0;
 }
 
 /* smtpd_state_reset - cleanup after disconnect */
@@ -225,4 +237,12 @@ void    smtpd_state_reset(SMTPD_STATE *state)
     if (state->tlsproxy)			/* still open after longjmp */
 	vstream_fclose(state->tlsproxy);
 #endif
+
+    /*
+     * BDAT.
+     */
+    if (state->bdat_get_stream)
+	(void) vstream_fclose(state->bdat_get_stream);
+    if (state->bdat_get_buffer)
+	vstring_free(state->bdat_get_buffer);
 }

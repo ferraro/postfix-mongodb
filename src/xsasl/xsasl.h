@@ -46,8 +46,11 @@ typedef struct XSASL_SERVER {
   */
 typedef struct XSASL_SERVER_CREATE_ARGS {
     VSTREAM *stream;
+    int     addr_family;
     const char *server_addr;
+    const char *server_port;
     const char *client_addr;
+    const char *client_port;
     const char *service;
     const char *user_realm;
     const char *security_options;
@@ -64,9 +67,10 @@ extern ARGV *xsasl_server_types(void);
 
 #define xsasl_server_create(impl, args) \
 	(impl)->create((impl), (args))
-#define XSASL_SERVER_CREATE(impl, args, a1, a2, a3, a4, a5, a6, a7) \
+#define XSASL_SERVER_CREATE(impl, args, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) \
 	xsasl_server_create((impl), (((args)->a1), ((args)->a2), ((args)->a3), \
-	((args)->a4), ((args)->a5), ((args)->a6), ((args)->a7), (args)))
+	((args)->a4), ((args)->a5), ((args)->a6), ((args)->a7), ((args)->a8), \
+	((args)->a9), ((args)->a10), (args)))
 #define xsasl_server_done(impl) (impl)->done((impl));
 
  /*
@@ -121,6 +125,7 @@ extern ARGV *xsasl_client_types(void);
 #define XSASL_AUTH_DONE	3		/* Authentication completed */
 #define XSASL_AUTH_FORM	4		/* Cannot decode response */
 #define XSASL_AUTH_FAIL	5		/* Error */
+#define XSASL_AUTH_TEMP	6		/* Temporary error condition */
 
 /* LICENSE
 /* .ad
@@ -131,6 +136,11 @@ extern ARGV *xsasl_client_types(void);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

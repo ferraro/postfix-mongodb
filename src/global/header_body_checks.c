@@ -13,7 +13,7 @@
 /*		void	(*prepend) (void *context, int rec_type,
 /*				const char *buf, ssize_t len, off_t offset);
 /*		char	*(*extend) (void *context, const char *command,
-/*				int cmd_len, const char *cmd_args,
+/*				ssize_t cmd_len, const char *cmd_args,
 /*				const char *where, const char *line,
 /*				ssize_t line_len, off_t offset);
 /*	} HBC_CALL_BACKS;
@@ -154,6 +154,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -185,7 +190,7 @@
   * Something that is guaranteed to be different from a real string result
   * from header/body_checks.
   */
-char hbc_checks_error;
+char    hbc_checks_error;
 const char hbc_checks_unknown;
 
  /*
@@ -228,7 +233,7 @@ static char *hbc_action(void *context, HBC_CALL_BACKS *cb,
 			        ssize_t line_len, off_t offset)
 {
     const char *cmd_args = cmd + strcspn(cmd, " \t");
-    int     cmd_len = cmd_args - cmd;
+    ssize_t cmd_len = cmd_args - cmd;
     char   *ret;
 
     /*
@@ -281,12 +286,16 @@ static char *hbc_action(void *context, HBC_CALL_BACKS *cb,
 	}
 	return ((char *) line);
     }
+    if (STREQUAL(cmd, "STRIP", cmd_len)) {
+	cb->logger(context, "strip", where, line, cmd_args);
+	return (HBC_CHECKS_STAT_IGNORE);
+    }
     /* Allow and ignore optional text after the action. */
 
     if (STREQUAL(cmd, "IGNORE", cmd_len))
 	/* XXX Not logged for compatibility with cleanup(8). */
 	return (HBC_CHECKS_STAT_IGNORE);
-
+ 
     if (STREQUAL(cmd, "DUNNO", cmd_len)		/* preferred */
 	||STREQUAL(cmd, "OK", cmd_len))		/* compatibility */
 	return ((char *) line);
@@ -414,7 +423,7 @@ void    _hbc_checks_free(HBC_CHECKS *hbc, ssize_t len)
     for (mp = hbc->map_info; mp < hbc->map_info + len; mp++)
 	if (mp->maps)
 	    maps_free(mp->maps);
-    myfree((char *) hbc);
+    myfree((void *) hbc);
 }
 
  /*
@@ -429,6 +438,7 @@ void    _hbc_checks_free(HBC_CHECKS *hbc, ssize_t len)
 #include <vstream.h>
 #include <msg_vstream.h>
 #include <rec_streamlf.h>
+#include <mail_params.h>
 
 typedef struct {
     HBC_CHECKS *header_checks;
@@ -556,6 +566,7 @@ static void err_print(void *unused_context, int err_flag,
 int     var_header_limit = 2000;
 int     var_mime_maxdepth = 20;
 int     var_mime_bound_len = 2000;
+char   *var_drop_hdrs = DEF_DROP_HDRS;
 
 int     main(int argc, char **argv)
 {

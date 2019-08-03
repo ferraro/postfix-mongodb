@@ -60,7 +60,7 @@
 int     vstream_tweak_sock(VSTREAM *fp)
 {
     SOCKADDR_STORAGE ss;
-    struct sockaddr *sa = (struct sockaddr *) & ss;
+    struct sockaddr *sa = (struct sockaddr *) &ss;
     SOCKADDR_SIZE sa_length = sizeof(ss);
     int     ret;
 
@@ -106,7 +106,7 @@ int     vstream_tweak_tcp(VSTREAM *fp)
      * getsockopt() bugs we set mss = 0, which is a harmless value.
      */
     if ((err = getsockopt(vstream_fileno(fp), IPPROTO_TCP, TCP_MAXSEG,
-			  (char *) &mss, &mss_len)) < 0
+			  (void *) &mss, &mss_len)) < 0
 	&& errno != ECONNRESET) {
 	msg_warn("%s: getsockopt TCP_MAXSEG: %m", myname);
 	return (err);
@@ -116,17 +116,25 @@ int     vstream_tweak_tcp(VSTREAM *fp)
 
     /*
      * Fix for recent Postfix versions: increase the VSTREAM buffer size if
-     * the VSTREAM buffer is smaller than the MSS. Note: the MSS may change
-     * when the route changes and IP path MTU discovery is turned on, so we
-     * choose a somewhat larger buffer.
+     * it is smaller than the MSS. Note: the MSS may change when the route
+     * changes and IP path MTU discovery is turned on, so we choose a
+     * somewhat larger buffer.
+     * 
+     * Note: as of 20120527, the CA_VSTREAM_CTL_BUFSIZE request can reduce the
+     * stream buffer size to less than VSTREAM_BUFSIZE, when the request is
+     * made before the first stream read or write operation. We don't want to
+     * reduce the buffer size.
      */
-#ifdef VSTREAM_CTL_BUFSIZE
-    if (mss > 0) {
+#define EFF_BUFFER_SIZE(fp) (vstream_req_bufsize(fp) ? \
+		vstream_req_bufsize(fp) : VSTREAM_BUFSIZE)
+
+#ifdef CA_VSTREAM_CTL_BUFSIZE
+    if (mss > EFF_BUFFER_SIZE(fp) / 2) {
 	if (mss < INT_MAX / 2)
 	    mss *= 2;
 	vstream_control(fp,
-			VSTREAM_CTL_BUFSIZE, (ssize_t) mss,
-			VSTREAM_CTL_END);
+			CA_VSTREAM_CTL_BUFSIZE(mss),
+			CA_VSTREAM_CTL_END);
     }
 
     /*
@@ -138,7 +146,7 @@ int     vstream_tweak_tcp(VSTREAM *fp)
 	int     nodelay = 1;
 
 	if ((err = setsockopt(vstream_fileno(fp), IPPROTO_TCP, TCP_NODELAY,
-			      (char *) &nodelay, sizeof(nodelay))) < 0
+			      (void *) &nodelay, sizeof(nodelay))) < 0
 	    && errno != ECONNRESET)
 	    msg_warn("%s: setsockopt TCP_NODELAY: %m", myname);
     }

@@ -17,7 +17,7 @@
   * External interface.
   */
 extern void smtpd_resolve_init(int);
-extern const RESOLVE_REPLY *smtpd_resolve_addr(const char *);
+extern const RESOLVE_REPLY *smtpd_resolve_addr(const char*, const char *);
 
 /* LICENSE
 /* .ad
@@ -28,6 +28,11 @@ extern const RESOLVE_REPLY *smtpd_resolve_addr(const char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*
 /*	TLS support originally by:
 /*	Lutz Jaenicke

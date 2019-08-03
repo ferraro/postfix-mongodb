@@ -6,13 +6,22 @@
 /* SYNOPSIS
 /*	#include <split_addr.h>
 /*
-/*	char	*split_addr(localpart, delimiter)
+/*	char	*split_addr_internal(localpart, delimiter_set)
 /*	char	*localpart;
-/*	int	delimiter;
+/*	const char *delimiter_set;
+/* LEGACY SUPPORT
+/*	char	*split_addr(localpart, delimiter_set)
+/*	char	*localpart;
+/*	const char *delimiter_set;
 /* DESCRIPTION
-/*	split_addr() null-terminates \fIlocalpart\fR at the first
-/*	occurrence of the \fIdelimiter\fR character found, and
+/*	split_addr*() null-terminates \fIlocalpart\fR at the first
+/*	occurrence of the \fIdelimiter\fR character(s) found, and
 /*	returns a pointer to the remainder.
+/*
+/*	With split_addr_internal(), the address must be in internal
+/*	(unquoted) form.
+/*
+/*	split_addr() is a backwards-compatible form for legacy code.
 /*
 /*	Reserved addresses are not split: postmaster, mailer-daemon,
 /*	double-bounce. Addresses that begin with owner-, or addresses
@@ -27,6 +36,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -41,6 +55,7 @@
 /* Utility library. */
 
 #include <split_at.h>
+#include <stringops.h>
 
 /* Global library. */
 
@@ -48,11 +63,11 @@
 #include <mail_addr.h>
 #include <split_addr.h>
 
-/* split_addr - split address with extreme prejudice */
+/* split_addr_internal - split address with extreme prejudice */
 
-char   *split_addr(char *localpart, int delimiter)
+char   *split_addr_internal(char *localpart, const char *delimiter_set)
 {
-    int     len;
+    ssize_t len;
 
     /*
      * Don't split these, regardless of what the delimiter is.
@@ -61,13 +76,13 @@ char   *split_addr(char *localpart, int delimiter)
 	return (0);
     if (strcasecmp(localpart, MAIL_ADDR_MAIL_DAEMON) == 0)
 	return (0);
-    if (strcasecmp(localpart, var_double_bounce_sender) == 0)
+    if (strcasecmp_utf8(localpart, var_double_bounce_sender) == 0)
 	return (0);
 
     /*
      * Backwards compatibility: don't split owner-foo or foo-request.
      */
-    if (delimiter == '-' && var_ownreq_special != 0) {
+    if (strchr(delimiter_set, '-') != 0 && var_ownreq_special != 0) {
 	if (strncasecmp(localpart, "owner-", 6) == 0)
 	    return (0);
 	if ((len = strlen(localpart) - 8) > 0
@@ -79,5 +94,10 @@ char   *split_addr(char *localpart, int delimiter)
      * Safe to split this address. Do not split the address if the result
      * would have a null localpart.
      */
-    return (delimiter == *localpart ? 0 : split_at(localpart, delimiter));
+    if ((len = strcspn(localpart, delimiter_set)) == 0 || localpart[len] == 0) {
+	return (0);
+    } else {
+	localpart[len] = 0;
+	return (localpart + len + 1);
+    }
 }

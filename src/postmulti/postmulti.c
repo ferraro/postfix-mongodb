@@ -5,22 +5,25 @@
 /*	Postfix multi-instance manager
 /* SYNOPSIS
 /* .fi
-/*	\fBENABLING MULTI-INSTANCE MANAGEMENT:\fR
+/* .ti -4
+/*	\fBEnabling multi-instance management:\fR
 /*
 /*	\fBpostmulti\fR \fB-e init\fR [\fB-v\fR]
 /*
-/*	\fBITERATOR MODE:\fR
+/* .ti -4
+/*	\fBIterator mode:\fR
 /*
 /*	\fBpostmulti\fR \fB-l\fR [\fB-aRv\fR] [\fB-g \fIgroup\fR]
 /*	[\fB-i \fIname\fR]
 /*
 /*	\fBpostmulti\fR \fB-p\fR [\fB-av\fR] [\fB-g \fIgroup\fR]
-/*	[\fB-i \fIname\fR] \fIcommand...\fR
+/*	[\fB-i \fIname\fR] \fIpostfix-command...\fR
 /*
 /*	\fBpostmulti\fR \fB-x\fR [\fB-aRv\fR] [\fB-g \fIgroup\fR]
-/*	[\fB-i \fIname\fR] \fIcommand...\fR
+/*	[\fB-i \fIname\fR] \fIunix-command...\fR
 /*
-/*	\fBLIFE-CYCLE MANAGEMENT:\fR
+/* .ti -4
+/*	\fBLife-cycle management:\fR
 /*
 /*	\fBpostmulti\fR \fB-e create\fR [\fB-av\fR]
 /*	[\fB-g \fIgroup\fR] [\fB-i \fIname\fR] [\fB-G \fIgroup\fR]
@@ -102,8 +105,8 @@
 /*	List Postfix instances with their instance name, instance
 /*	group name, enable/disable status and configuration directory.
 /* .SH "Postfix-wrapper mode"
-/* .IP \fB-p\fR
-/*	Invoke \fBpostfix(1)\fR to execute the specified \fIcommand\fR.
+/* .IP "\fB-p \fIpostfix-command\fR"
+/*	Invoke \fBpostfix(1)\fR to execute \fIpostfix-command\fR.
 /*	This option implements the \fBpostfix-wrapper\fR(5) interface.
 /* .RS
 /* .IP \(bu
@@ -133,8 +136,8 @@
 /*	# postmulti -g msa -p start
 /* .RE
 /* .SH "Command mode"
-/* .IP \fB-x\fR
-/*	Execute the specified \fIcommand\fR for all Postfix instances.
+/* .IP "\fB-x \fIunix-command\fR"
+/*	Execute the specified \fIunix-command\fR for all Postfix instances.
 /*	The command runs with appropriate environment settings for
 /*	MAIL_CONFIG, command_directory, daemon_directory,
 /*	config_directory, queue_directory, data_directory,
@@ -323,8 +326,9 @@
 /* .IP "\fBdaemon_directory (see 'postconf -d' output)\fR"
 /*	The directory with Postfix support programs and daemon programs.
 /* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
-/*	The list of environment parameters that a Postfix process will
-/*	import from a non-Postfix parent process.
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBmulti_instance_directories (empty)\fR"
 /*	An optional list of non-default Postfix configuration directories;
 /*	these directories belong to additional Postfix instances that share
@@ -350,18 +354,33 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix 3.0 and later:
+/* .IP "\fBmeta_directory (see 'postconf -d' output)\fR"
+/*	The location of non-executable files that are shared among
+/*	multiple Postfix instances, such as postfix-files, dynamicmaps.cf,
+/*	and the multi-instance template files main.cf.proto and master.cf.proto.
+/* .IP "\fBshlib_directory (see 'postconf -d' output)\fR"
+/*	The location of Postfix dynamically-linked libraries
+/*	(libpostfix-*.so), and the default location of Postfix database
+/*	plugins (postfix-*.so) that have a relative pathname in the
+/*	dynamicmaps.cf file.
 /* FILES
-/*	$daemon_directory/main.cf, stock configuration file
-/*	$daemon_directory/master.cf, stock configuration file
+/*	$meta_directory/main.cf.proto, stock configuration file
+/*	$meta_directory/master.cf.proto, stock configuration file
 /*	$daemon_directory/postmulti-script, life-cycle helper program
 /* SEE ALSO
 /*	postfix(1), Postfix control program
 /*	postfix-wrapper(5), Postfix multi-instance API
 /* README FILES
+/* .ad
+/* .fi
 /*	Use "\fBpostconf readme_directory\fR" or "\fBpostconf
 /*	html_directory\fR" to locate this information.
+/* .nf
+/* .na
 /*	MULTI_INSTANCE_README, Postfix multi-instance management
 /* HISTORY
 /* .ad
@@ -380,6 +399,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -392,7 +416,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
-#include <syslog.h>
 #include <errno.h>
 #include <ctype.h>
 #ifdef USE_PATHS_H
@@ -404,7 +427,6 @@
 
 #include <msg.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <vstream.h>
 #include <vstring_vstream.h>
 #include <stringops.h>
@@ -422,6 +444,8 @@
 #include <mail_version.h>
 #include <mail_params.h>
 #include <mail_conf.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Application-specific. */
 
@@ -443,6 +467,8 @@ typedef struct {
 static SHARED_PATH shared_dir_table[] = {
     VAR_COMMAND_DIR, &var_command_dir,
     VAR_DAEMON_DIR, &var_daemon_dir,
+    VAR_META_DIR, &var_meta_dir,
+    VAR_SHLIB_DIR, &var_shlib_dir,
     0,
 };
 
@@ -703,7 +729,7 @@ static void free_instance(INSTANCE *ip)
 	myfree(ip->queue_dir);
     if (ip->data_dir)
 	myfree(ip->data_dir);
-    myfree((char *) ip);
+    myfree((void *) ip);
 }
 
 #endif
@@ -742,7 +768,7 @@ static INSTANCE *create_primary_instance(void)
     INSTANCE *ip = alloc_instance(var_config_dir);
 
     /*
-     * There is no need to load primary instance paramater settings from
+     * There is no need to load primary instance parameter settings from
      * file. We already have the main.cf parameters of interest in memory.
      */
 #define SAVE_INSTANCE_NAME(val) (*(val) ? mystrdup(val) : 0)
@@ -773,20 +799,19 @@ static INSTANCE *load_instance(INSTANCE *ip)
     };
 
     /*
-     * XXX: We could really use a "postconf -E" to expand values in the
-     * context of the target main.cf!
+     * Expand parameter values in the context of the target main.cf file.
      */
 #define REQUEST_PARAM_COUNT 5			/* # of requested parameters */
 
     cmd = argv_alloc(REQUEST_PARAM_COUNT + 3);
     name = concatenate(var_command_dir, "/", "postconf", (char *) 0);
-    argv_add(cmd, name, "-c", ip->config_dir,
+    argv_add(cmd, name, "-xc", ip->config_dir,
 	     VAR_QUEUE_DIR, VAR_DATA_DIR,
 	     VAR_MULTI_NAME, VAR_MULTI_GROUP, VAR_MULTI_ENABLE,
 	     (char *) 0);
     myfree(name);
-    pipe = vstream_popen(O_RDONLY, VSTREAM_POPEN_ARGV, cmd->argv,
-			 VSTREAM_POPEN_END);
+    pipe = vstream_popen(O_RDONLY, CA_VSTREAM_POPEN_ARGV(cmd->argv),
+			 CA_VSTREAM_POPEN_END);
     argv_free(cmd);
     if (pipe == 0)
 	msg_fatal("Cannot parse %s/main.cf file: %m", ip->config_dir);
@@ -847,7 +872,7 @@ static void load_all_instances(void)
      * only comma characters. Count the actual number of elements, before we
      * decide that the list is empty.
      */
-    secondary_names = argv_split(var_multi_conf_dirs, "\t\n\r, ");
+    secondary_names = argv_split(var_multi_conf_dirs, CHARS_COMMA_SP);
 
     /*
      * First, the primary instance.  This is synthesized out of thin air.
@@ -938,13 +963,22 @@ static void check_shared_dir_status(void)
     struct stat st;
     const SHARED_PATH *sp;
 
+    /*
+     * XXX Avoid false conflicts with meta_directory. This usually overlaps
+     * with other directories, typcally config_directory, shlib_directory or
+     * daemon_directory.
+     */
     for (sp = shared_dir_table; sp->param_name; ++sp) {
+	if (sp->param_value[0][0] != '/')	/* "no" or other special */
+	    continue;
 	if (stat(sp->param_value[0], &st) < 0)
 	    msg_fatal("%s = '%s': directory not found: %m",
 		      sp->param_name, sp->param_value[0]);
 	if (!S_ISDIR(st.st_mode))
 	    msg_fatal("%s = '%s' is not a directory",
 		      sp->param_name, sp->param_value[0]);
+	if (strcmp(sp->param_name, VAR_META_DIR) == 0)
+	    continue;
 	register_claim(var_config_dir, sp->param_name, sp->param_value[0]);
     }
 }
@@ -1183,7 +1217,7 @@ static void export_helper_environment(INSTANCE *target, int export_flags)
      * because some shell scripts use environment settings to override
      * main.cf settings.
      */
-    import_env = argv_split(var_import_environ, ", \t\r\n");
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
     clean_env(import_env->argv);
     argv_free(import_env);
 
@@ -1444,7 +1478,7 @@ static int word_in_list(char *cmdlist, const char *cmd)
     char   *elem;
 
     cp = saved = mystrdup(cmdlist);
-    while ((elem = mystrtok(&cp, "\t\n\r, ")) != 0 && strcmp(elem, cmd) != 0)
+    while ((elem = mystrtok(&cp, CHARS_COMMA_SP)) != 0 && strcmp(elem, cmd) != 0)
 	 /* void */ ;
     myfree(saved);
     return (elem != 0);
@@ -1657,12 +1691,21 @@ int     main(int argc, char **argv)
 	argv[0] = slash + 1;
     if (isatty(STDERR_FILENO))
 	msg_vstream_init(argv[0], VSTREAM_ERR);
-    msg_syslog_init(argv[0], LOG_PID, LOG_FACILITY);
+    maillog_client_init(argv[0], MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*
      * Check the Postfix library version as soon as we enable logging.
      */
     MAIL_VERSION_CHECK;
+
+    /*
+     * Process main.cf parameters. This is done before the GETOPT() loop to
+     * improve logging. This assumes that no command-line option can affect
+     * parameter processing.
+     */
+    mail_conf_read();
+    get_mail_conf_str_table(str_table);
+    maillog_client_init(argv[0], MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     if ((config_dir = getenv(CONF_ENV_PATH)) != 0
 	&& strcmp(config_dir, DEF_CONFIG_DIR) != 0)
@@ -1670,7 +1713,8 @@ int     main(int argc, char **argv)
 		  CONF_ENV_PATH, config_dir);
 
     /*
-     * Parse switches.
+     * Parse switches. Move the above mail_conf_read() block after this loop,
+     * if any command-line option can affect parameter processing.
      */
     while ((ch = GETOPT(argc, argv, "ae:g:i:G:I:lpRvx")) > 0) {
 	switch (ch) {
@@ -1685,7 +1729,7 @@ int     main(int argc, char **argv)
 	case 'e':
 	    if ((code = EDIT_CMD_CODE(optarg)) < 0)
 		msg_fatal("Invalid '-e' edit action '%s'. Specify '%s', "
-			  "'%s', '%s', '%s', '%s', '%s', '%s', '%s' or '%s'",
+			  "'%s', '%s', '%s', '%s', '%s', '%s' or '%s'",
 			  optarg,
 			  EDIT_CMD_STR(EDIT_CMD_CREATE),
 			  EDIT_CMD_STR(EDIT_CMD_DESTROY),
@@ -1694,8 +1738,7 @@ int     main(int argc, char **argv)
 			  EDIT_CMD_STR(EDIT_CMD_ENABLE),
 			  EDIT_CMD_STR(EDIT_CMD_DISABLE),
 			  EDIT_CMD_STR(EDIT_CMD_ASSIGN),
-			  EDIT_CMD_STR(EDIT_CMD_INIT),
-			  optarg);
+			  EDIT_CMD_STR(EDIT_CMD_INIT));
 	    if (cmd_mode != code)
 		command_mode_count++;
 	    cmd_mode = code;
@@ -1784,12 +1827,6 @@ int     main(int argc, char **argv)
 	    msg_fatal("Parameter overrides not valid with '-e %s'",
 		      EDIT_CMD_STR(cmd_mode));
     }
-
-    /*
-     * Proces main.cf parameters.
-     */
-    mail_conf_read();
-    get_mail_conf_str_table(str_table);
 
     /*
      * Sanity checks.

@@ -57,6 +57,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System libraries. */
@@ -105,13 +110,11 @@
 
 static char *master_path;		/* config file name */
 static VSTREAM *master_fp;		/* config file pointer */
+static int master_line_last;		/* config file line number */
 static int master_line;			/* config file line number */
 static ARGV *master_disable;		/* disabled service patterns */
 
-static char master_blanks[] = " \t\r\n";/* field delimiters */
-
-static NORETURN fatal_invalid_field(char *, char *);
-static NORETURN fatal_with_context(char *,...);
+static char master_blanks[] = CHARS_SPACE;	/* field delimiters */
 
 /* fset_master_ent - specify configuration file pathname */
 
@@ -135,7 +138,7 @@ void    set_master_ent()
 	msg_panic("%s: no configuration file specified", myname);
     if ((master_fp = vstream_fopen(master_path, O_RDONLY, 0)) == 0)
 	msg_fatal("open %s: %m", master_path);
-    master_line = 0;
+    master_line_last = 0;
     if (master_disable != 0)
 	msg_panic("%s: service disable list still exists", myname);
     if (inet_proto_info()->ai_family_list[0] == 0) {
@@ -167,9 +170,21 @@ void    end_master_ent()
     master_disable = 0;
 }
 
+/* master_conf_context - plot the target range */
+
+static const char *master_conf_context(void)
+{
+    static VSTRING *context_buf = 0;
+
+    if (context_buf == 0)
+	context_buf = vstring_alloc(100);
+    vstring_sprintf(context_buf, "%s: line %d", master_path, master_line);
+    return (vstring_str(context_buf));
+}
+
 /* fatal_with_context - print fatal error with file/line context */
 
-static NORETURN fatal_with_context(char *format,...)
+static NORETURN PRINTFLIKE(1, 2) fatal_with_context(char *format,...)
 {
     const char *myname = "fatal_with_context";
     VSTRING *vp = vstring_alloc(100);
@@ -181,7 +196,7 @@ static NORETURN fatal_with_context(char *format,...)
     va_start(ap, format);
     vstring_vsprintf(vp, format, ap);
     va_end(ap);
-    msg_fatal("%s: line %d: %s", master_path, master_line, vstring_str(vp));
+    msg_fatal("%s: %s", master_conf_context(), vstring_str(vp));
 }
 
 /* fatal_invalid_field - report invalid field value */
@@ -202,6 +217,9 @@ static char *get_str_ent(char **bufp, char *name, char *def_val)
     if (strcmp(value, "-") == 0) {
 	if (def_val == 0)
 	    fatal_with_context("field \"%s\" has no default value", name);
+	if (warn_compat_break_chroot && strcmp(name, "chroot") == 0)
+	    msg_info("%s: using backwards-compatible default setting "
+		     "%s=%s", master_conf_context(), name, def_val);
 	return (def_val);
     } else {
 	return (value);
@@ -259,6 +277,7 @@ MASTER_SERV *get_master_ent()
     char   *atmp;
     const char *parse_err;
     static char *saved_interfaces = 0;
+    char   *err;
 
     if (master_fp == 0)
 	msg_panic("get_master_ent: config file not open");
@@ -284,7 +303,7 @@ MASTER_SERV *get_master_ent()
      * Skip blank lines and comment lines.
      */
     for (;;) {
-	if (readlline(buf, master_fp, &master_line) == 0) {
+	if (readllines(buf, master_fp, &master_line_last, &master_line) == 0) {
 	    vstring_free(buf);
 	    vstring_free(junk);
 	    return (0);
@@ -294,7 +313,7 @@ MASTER_SERV *get_master_ent()
 	    continue;
 	name = cp;
 	transport = get_str_ent(&bufp, "transport type", (char *) 0);
-	vstring_sprintf(junk, "%s.%s", name, transport);
+	vstring_sprintf(junk, "%s/%s", name, transport);
 	if (match_service_match(master_disable, vstring_str(junk)) == 0)
 	    break;
     }
@@ -336,17 +355,14 @@ MASTER_SERV *get_master_ent()
 	serv->type = MASTER_SERV_TYPE_INET;
 	atmp = mystrdup(name);
 	if ((parse_err = host_port(atmp, &host, "", &port, (char *) 0)) != 0)
-	    msg_fatal("%s: line %d: %s in \"%s\"",
-		      VSTREAM_PATH(master_fp), master_line,
-		      parse_err, name);
+	    fatal_with_context("%s in \"%s\"", parse_err, name);
 	if (*host) {
 	    serv->flags |= MASTER_FLAG_INETHOST;/* host:port */
 	    MASTER_INET_ADDRLIST(serv) = (INET_ADDR_LIST *)
 		mymalloc(sizeof(*MASTER_INET_ADDRLIST(serv)));
 	    inet_addr_list_init(MASTER_INET_ADDRLIST(serv));
 	    if (inet_addr_host(MASTER_INET_ADDRLIST(serv), host) == 0)
-		msg_fatal("%s: line %d: bad hostname or network address: %s",
-			  VSTREAM_PATH(master_fp), master_line, name);
+		fatal_with_context("bad hostname or network address: %s", name);
 	    inet_addr_list_uniq(MASTER_INET_ADDRLIST(serv));
 	    serv->listen_fd_count = MASTER_INET_ADDRLIST(serv)->used;
 	} else {
@@ -368,6 +384,10 @@ MASTER_SERV *get_master_ent()
 	}
     } else if (STR_SAME(transport, MASTER_XPORT_NAME_UNIX)) {
 	serv->type = MASTER_SERV_TYPE_UNIX;
+	serv->listen_fd_count = 1;
+	serv->flags |= MASTER_FLAG_LOCAL_ONLY;
+    } else if (STR_SAME(transport, MASTER_XPORT_NAME_UXDG)) {
+	serv->type = MASTER_SERV_TYPE_UXDG;
 	serv->listen_fd_count = 1;
 	serv->flags |= MASTER_FLAG_LOCAL_ONLY;
     } else if (STR_SAME(transport, MASTER_XPORT_NAME_FIFO)) {
@@ -433,6 +453,9 @@ MASTER_SERV *get_master_ent()
     } else if (serv->type == MASTER_SERV_TYPE_UNIX) {
 	serv->name = mail_pathname(private ? MAIL_CLASS_PRIVATE :
 				   MAIL_CLASS_PUBLIC, name);
+    } else if (serv->type == MASTER_SERV_TYPE_UXDG) {
+	serv->name = mail_pathname(private ? MAIL_CLASS_PRIVATE :
+				   MAIL_CLASS_PUBLIC, name);
     } else if (serv->type == MASTER_SERV_TYPE_FIFO) {
 	serv->name = mail_pathname(private ? MAIL_CLASS_PRIVATE :
 				   MAIL_CLASS_PUBLIC, name);
@@ -450,8 +473,7 @@ MASTER_SERV *get_master_ent()
      * sockets is frozen anyway once we build the command-line vector below.
      */
     if (serv->listen_fd_count == 0) {
-	msg_fatal("%s: line %d: no valid IP address found: %s",
-		  VSTREAM_PATH(master_fp), master_line, name);
+	fatal_with_context("no valid IP address found: %s", name);
     }
     serv->listen_fd = (int *) mymalloc(sizeof(int) * serv->listen_fd_count);
     for (n = 0; n < serv->listen_fd_count; n++)
@@ -468,7 +490,7 @@ MASTER_SERV *get_master_ent()
      * XXX Chroot cannot imply unprivileged service (for example, the pickup
      * service runs chrooted but needs privileges to open files as the user).
      */
-    chroot = get_bool_ent(&bufp, "chroot", "y");
+    chroot = get_bool_ent(&bufp, "chroot", var_compat_level < 1 ? "y" : "n");
 
     /*
      * Wakeup timer. XXX should we require that var_proc_limit == 1? Right
@@ -551,8 +573,12 @@ MASTER_SERV *get_master_ent()
 	argv_add(serv->args, "-s",
 	    vstring_str(vstring_sprintf(junk, "%d", serv->listen_fd_count)),
 		 (char *) 0);
-    while ((cp = mystrtok(&bufp, master_blanks)) != 0)
+    while ((cp = mystrtokq(&bufp, master_blanks, CHARS_BRACE)) != 0) {
+	if (*cp == CHARS_BRACE[0]
+	    && (err = extpar(&cp, CHARS_BRACE, EXTPAR_FLAG_STRIP)) != 0)
+	    fatal_with_context("%s", err);
 	argv_add(serv->args, cp, (char *) 0);
+    }
     argv_terminate(serv->args);
 
     /*
@@ -579,6 +605,7 @@ void    print_master_ent(MASTER_SERV *serv)
 #ifdef MASTER_SERV_TYPE_PASS
 	     serv->type == MASTER_SERV_TYPE_PASS ? MASTER_XPORT_NAME_PASS :
 #endif
+	     serv->type == MASTER_SERV_TYPE_UXDG ? MASTER_XPORT_NAME_UXDG :
 	     "unknown transport type");
     msg_info("listen_fd_count: %d", serv->listen_fd_count);
     msg_info("wakeup: %d", serv->wakeup_time);
@@ -605,7 +632,7 @@ void    free_master_ent(MASTER_SERV *serv)
      */
     if (serv->flags & MASTER_FLAG_INETHOST) {
 	inet_addr_list_free(MASTER_INET_ADDRLIST(serv));
-	myfree((char *) MASTER_INET_ADDRLIST(serv));
+	myfree((void *) MASTER_INET_ADDRLIST(serv));
     }
     if (serv->type == MASTER_SERV_TYPE_INET)
 	myfree(MASTER_INET_PORT(serv));
@@ -613,6 +640,6 @@ void    free_master_ent(MASTER_SERV *serv)
     myfree(serv->name);
     myfree(serv->path);
     argv_free(serv->args);
-    myfree((char *) serv->listen_fd);
-    myfree((char *) serv);
+    myfree((void *) serv->listen_fd);
+    myfree((void *) serv);
 }

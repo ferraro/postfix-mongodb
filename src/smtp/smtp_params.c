@@ -9,6 +9,7 @@
 #ifdef USE_TLS
 	VAR_SMTP_SASL_TLS_OPTS, DEF_SMTP_SASL_TLS_OPTS, &var_smtp_sasl_tls_opts, 0, 0,
 	VAR_SMTP_SASL_TLSV_OPTS, DEF_SMTP_SASL_TLSV_OPTS, &var_smtp_sasl_tlsv_opts, 0, 0,
+	VAR_SMTP_TLS_CHAIN_FILES, DEF_SMTP_TLS_CHAIN_FILES, &var_smtp_tls_chain_files, 0, 0,
 	VAR_SMTP_TLS_CERT_FILE, DEF_SMTP_TLS_CERT_FILE, &var_smtp_tls_cert_file, 0, 0,
 	VAR_SMTP_TLS_KEY_FILE, DEF_SMTP_TLS_KEY_FILE, &var_smtp_tls_key_file, 0, 0,
 	VAR_SMTP_TLS_DCERT_FILE, DEF_SMTP_TLS_DCERT_FILE, &var_smtp_tls_dcert_file, 0, 0,
@@ -23,18 +24,23 @@
 	VAR_SMTP_TLS_SEC_CMATCH, DEF_SMTP_TLS_SEC_CMATCH, &var_smtp_tls_sec_cmatch, 1, 0,
 	VAR_SMTP_TLS_FPT_CMATCH, DEF_SMTP_TLS_FPT_CMATCH, &var_smtp_tls_fpt_cmatch, 0, 0,
 	VAR_SMTP_TLS_FPT_DGST, DEF_SMTP_TLS_FPT_DGST, &var_smtp_tls_fpt_dgst, 1, 0,
+	VAR_SMTP_TLS_TAFILE, DEF_SMTP_TLS_TAFILE, &var_smtp_tls_tafile, 0, 0,
 	VAR_SMTP_TLS_PROTO, DEF_SMTP_TLS_PROTO, &var_smtp_tls_proto, 0, 0,
 	VAR_SMTP_TLS_CIPH, DEF_SMTP_TLS_CIPH, &var_smtp_tls_ciph, 1, 0,
 	VAR_SMTP_TLS_ECCERT_FILE, DEF_SMTP_TLS_ECCERT_FILE, &var_smtp_tls_eccert_file, 0, 0,
 	VAR_SMTP_TLS_ECKEY_FILE, DEF_SMTP_TLS_ECKEY_FILE, &var_smtp_tls_eckey_file, 0, 0,
 	VAR_SMTP_TLS_LOGLEVEL, DEF_SMTP_TLS_LOGLEVEL, &var_smtp_tls_loglevel, 0, 0,
+	VAR_SMTP_TLS_SNI, DEF_SMTP_TLS_SNI, &var_smtp_tls_sni, 0, 0,
+	VAR_SMTP_TLS_INSECURE_MX_POLICY, DEF_SMTP_TLS_INSECURE_MX_POLICY, &var_smtp_tls_insecure_mx_policy, 0, 0,
 #endif
 	VAR_SMTP_SASL_MECHS, DEF_SMTP_SASL_MECHS, &var_smtp_sasl_mechs, 0, 0,
 	VAR_SMTP_SASL_TYPE, DEF_SMTP_SASL_TYPE, &var_smtp_sasl_type, 1, 0,
 	VAR_SMTP_BIND_ADDR, DEF_SMTP_BIND_ADDR, &var_smtp_bind_addr, 0, 0,
 	VAR_SMTP_BIND_ADDR6, DEF_SMTP_BIND_ADDR6, &var_smtp_bind_addr6, 0, 0,
+	VAR_SMTP_VRFY_TGT, DEF_SMTP_VRFY_TGT, &var_smtp_vrfy_tgt, 1, 0,
 	VAR_SMTP_HELO_NAME, DEF_SMTP_HELO_NAME, &var_smtp_helo_name, 1, 0,
 	VAR_SMTP_HOST_LOOKUP, DEF_SMTP_HOST_LOOKUP, &var_smtp_host_lookup, 1, 0,
+	VAR_SMTP_DNS_SUPPORT, DEF_SMTP_DNS_SUPPORT, &var_smtp_dns_support, 0, 0,
 	VAR_SMTP_CACHE_DEST, DEF_SMTP_CACHE_DEST, &var_smtp_cache_dest, 0, 0,
 	VAR_SCACHE_SERVICE, DEF_SCACHE_SERVICE, &var_scache_service, 1, 0,
 	VAR_SMTP_EHLO_DIS_WORDS, DEF_SMTP_EHLO_DIS_WORDS, &var_smtp_ehlo_dis_words, 0, 0,
@@ -44,7 +50,7 @@
 	VAR_SMTP_TLS_POLICY, DEF_SMTP_TLS_POLICY, &var_smtp_tls_policy, 0, 0,
 	VAR_PROP_EXTENSION, DEF_PROP_EXTENSION, &var_prop_extension, 0, 0,
 	VAR_SMTP_GENERIC_MAPS, DEF_SMTP_GENERIC_MAPS, &var_smtp_generic_maps, 0, 0,
-	VAR_LMTP_TCP_PORT, DEF_LMTP_TCP_PORT, &var_lmtp_tcp_port, 0, 0,
+	VAR_SMTP_TCP_PORT, DEF_SMTP_TCP_PORT, &var_smtp_tcp_port, 0, 0,
 	VAR_SMTP_PIX_BUG_WORDS, DEF_SMTP_PIX_BUG_WORDS, &var_smtp_pix_bug_words, 0, 0,
 	VAR_SMTP_PIX_BUG_MAPS, DEF_SMTP_PIX_BUG_MAPS, &var_smtp_pix_bug_maps, 0, 0,
 	VAR_SMTP_SASL_AUTH_CACHE_NAME, DEF_SMTP_SASL_AUTH_CACHE_NAME, &var_smtp_sasl_auth_cache_name, 0, 0,
@@ -56,6 +62,9 @@
 	VAR_SMTP_RESP_FILTER, DEF_SMTP_RESP_FILTER, &var_smtp_resp_filter, 0, 0,
 	VAR_SMTP_ADDR_PREF, DEF_SMTP_ADDR_PREF, &var_smtp_addr_pref, 1, 0,
 	VAR_SMTP_DNS_RES_OPT, DEF_SMTP_DNS_RES_OPT, &var_smtp_dns_res_opt, 0, 0,
+	VAR_SMTP_DSN_FILTER, DEF_SMTP_DSN_FILTER, &var_smtp_dsn_filter, 0, 0,
+	VAR_SMTP_DNS_RE_FILTER, DEF_SMTP_DNS_RE_FILTER, &var_smtp_dns_re_filter, 0, 0,
+	VAR_TLSPROXY_SERVICE, DEF_TLSPROXY_SERVICE, &var_tlsproxy_service, 1, 0,
 	0,
     };
     static const CONFIG_TIME_TABLE smtp_time_table[] = {
@@ -71,6 +80,8 @@
 	VAR_SMTP_QUIT_TMOUT, DEF_SMTP_QUIT_TMOUT, &var_smtp_quit_tmout, 1, 0,
 	VAR_SMTP_PIX_THRESH, DEF_SMTP_PIX_THRESH, &var_smtp_pix_thresh, 0, 0,
 	VAR_SMTP_PIX_DELAY, DEF_SMTP_PIX_DELAY, &var_smtp_pix_delay, 1, 0,
+	VAR_QUEUE_RUN_DELAY, DEF_QUEUE_RUN_DELAY, &var_queue_run_delay, 1, 0,
+	VAR_MIN_BACKOFF_TIME, DEF_MIN_BACKOFF_TIME, &var_min_backoff_time, 1, 0,
 	VAR_SMTP_CACHE_CONNT, DEF_SMTP_CACHE_CONNT, &var_smtp_cache_conn, 1, 0,
 	VAR_SMTP_REUSE_TIME, DEF_SMTP_REUSE_TIME, &var_smtp_reuse_time, 1, 0,
 #ifdef USE_TLS
@@ -84,6 +95,7 @@
 	VAR_SMTP_LINE_LIMIT, DEF_SMTP_LINE_LIMIT, &var_smtp_line_limit, 0, 0,
 	VAR_SMTP_MXADDR_LIMIT, DEF_SMTP_MXADDR_LIMIT, &var_smtp_mxaddr_limit, 0, 0,
 	VAR_SMTP_MXSESS_LIMIT, DEF_SMTP_MXSESS_LIMIT, &var_smtp_mxsess_limit, 0, 0,
+	VAR_SMTP_REUSE_COUNT, DEF_SMTP_REUSE_COUNT, &var_smtp_reuse_count, 0, 0,
 #ifdef USE_TLS
 	VAR_SMTP_TLS_SCERT_VD, DEF_SMTP_TLS_SCERT_VD, &var_smtp_tls_scert_vd, 0, 0,
 #endif
@@ -103,16 +115,20 @@
 	VAR_SMTP_CACHE_DEMAND, DEF_SMTP_CACHE_DEMAND, &var_smtp_cache_demand,
 	VAR_SMTP_USE_TLS, DEF_SMTP_USE_TLS, &var_smtp_use_tls,
 	VAR_SMTP_ENFORCE_TLS, DEF_SMTP_ENFORCE_TLS, &var_smtp_enforce_tls,
+	VAR_SMTP_TLS_CONN_REUSE, DEF_SMTP_TLS_CONN_REUSE, &var_smtp_tls_conn_reuse,
 #ifdef USE_TLS
 	VAR_SMTP_TLS_ENFORCE_PN, DEF_SMTP_TLS_ENFORCE_PN, &var_smtp_tls_enforce_peername,
 	VAR_SMTP_TLS_NOTEOFFER, DEF_SMTP_TLS_NOTEOFFER, &var_smtp_tls_note_starttls_offer,
 	VAR_SMTP_TLS_BLK_EARLY_MAIL_REPLY, DEF_SMTP_TLS_BLK_EARLY_MAIL_REPLY, &var_smtp_tls_blk_early_mail_reply,
+	VAR_SMTP_TLS_FORCE_TLSA, DEF_SMTP_TLS_FORCE_TLSA, &var_smtp_tls_force_tlsa,
 #endif
+	VAR_SMTP_TLS_WRAPPER, DEF_SMTP_TLS_WRAPPER, &var_smtp_tls_wrappermode,
 	VAR_SMTP_SENDER_AUTH, DEF_SMTP_SENDER_AUTH, &var_smtp_sender_auth,
 	VAR_SMTP_CNAME_OVERR, DEF_SMTP_CNAME_OVERR, &var_smtp_cname_overr,
 	VAR_SMTP_SASL_AUTH_SOFT_BOUNCE, DEF_SMTP_SASL_AUTH_SOFT_BOUNCE, &var_smtp_sasl_auth_soft_bounce,
 	VAR_LMTP_ASSUME_FINAL, DEF_LMTP_ASSUME_FINAL, &var_lmtp_assume_final,
 	VAR_SMTP_REC_DEADLINE, DEF_SMTP_REC_DEADLINE, &var_smtp_rec_deadline,
 	VAR_SMTP_DUMMY_MAIL_AUTH, DEF_SMTP_DUMMY_MAIL_AUTH, &var_smtp_dummy_mail_auth,
+	VAR_SMTP_BALANCE_INET_PROTO, DEF_SMTP_BALANCE_INET_PROTO, &var_smtp_balance_inet_proto,
 	0,
     };

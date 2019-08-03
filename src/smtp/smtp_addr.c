@@ -6,8 +6,9 @@
 /* SYNOPSIS
 /*	#include "smtp_addr.h"
 /*
-/*	DNS_RR *smtp_domain_addr(name, misc_flags, why, found_myself)
+/*	DNS_RR *smtp_domain_addr(name, mxrr, misc_flags, why, found_myself)
 /*	char	*name;
+/*	DNS_RR  **mxrr;
 /*	int	misc_flags;
 /*	DSN_BUF	*why;
 /*	int	*found_myself;
@@ -29,7 +30,9 @@
 /*	so that it contains only hosts that are more preferred than the
 /*	local mail server itself. The found_myself result parameter
 /*	is updated when the local MTA is MX host for the specified
-/*	destination.
+/*	destination.  If MX records were found, the rname, qname,
+/*	and dnssec validation status of the MX RRset are returned
+/*	via mxrr, which the caller must free with dns_rr_free().
 /*
 /*	When no mail exchanger is listed in the DNS for \fIname\fR, the
 /*	request is passed to smtp_host_addr().
@@ -58,6 +61,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -82,6 +90,7 @@
 #include <stringops.h>
 #include <myaddrinfo.h>
 #include <inet_proto.h>
+#include <midna_domain.h>
 
 /* Global library. */
 
@@ -120,7 +129,7 @@ static void smtp_print_addr(const char *what, DNS_RR *addr_list)
 
 /* smtp_addr_one - address lookup for one host name */
 
-static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
+static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host, int res_opt,
 			             unsigned pref, DSN_BUF *why)
 {
     const char *myname = "smtp_addr_one";
@@ -130,6 +139,7 @@ static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
     struct addrinfo *res0;
     struct addrinfo *res;
     INET_PROTO_INFO *proto_info = inet_proto_info();
+    unsigned char *proto_family_list = proto_info->sa_family_list;
     int     found;
 
     if (msg_verbose)
@@ -138,14 +148,16 @@ static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
     /*
      * Interpret a numerical name as an address.
      */
-    if (hostaddr_to_sockaddr(host, (char *) 0, 0, &res0) == 0
-     && strchr((char *) proto_info->sa_family_list, res0->ai_family) != 0) {
-	if ((addr = dns_sa_to_rr(host, pref, res0->ai_addr)) == 0)
-	    msg_fatal("host %s: conversion error for address family %d: %m",
-		    host, ((struct sockaddr *) (res0->ai_addr))->sa_family);
-	addr_list = dns_rr_append(addr_list, addr);
+    if (hostaddr_to_sockaddr(host, (char *) 0, 0, &res0) == 0) {
+	if (strchr((char *) proto_family_list, res0->ai_family) != 0) {
+	    if ((addr = dns_sa_to_rr(host, pref, res0->ai_addr)) == 0)
+		msg_fatal("host %s: conversion error for address family "
+			  "%d: %m", host, res0->ai_addr->sa_family);
+	    addr_list = dns_rr_append(addr_list, addr);
+	    freeaddrinfo(res0);
+	    return (addr_list);
+	}
 	freeaddrinfo(res0);
-	return (addr_list);
     }
 
     /*
@@ -155,7 +167,8 @@ static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
      * should not clobber a soft error text and status code.
      */
     if (smtp_host_lookup_mask & SMTP_HOST_FLAG_DNS) {
-	switch (dns_lookup_v(host, smtp_dns_res_opt, &addr, (VSTRING *) 0,
+	res_opt |= smtp_dns_res_opt;
+	switch (dns_lookup_v(host, res_opt, &addr, (VSTRING *) 0,
 			     why->reason, DNS_REQ_FLAG_NONE,
 			     proto_info->dns_atype_list)) {
 	case DNS_OK:
@@ -171,6 +184,9 @@ static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
 	    return (addr_list);
 	case DNS_INVAL:
 	    dsb_status(why, SMTP_HAS_SOFT_DSN(why) ? "4.4.4" : "5.4.4");
+	    return (addr_list);
+	case DNS_POLICY:
+	    dsb_status(why, "4.7.0");
 	    return (addr_list);
 	case DNS_NOTFOUND:
 	    dsb_status(why, SMTP_HAS_SOFT_DSN(why) ? "4.4.4" : "5.4.4");
@@ -204,15 +220,15 @@ static DNS_RR *smtp_addr_one(DNS_RR *addr_list, const char *host,
 		       host, MAI_STRERROR(aierr));
 	} else {
 	    for (found = 0, res = res0; res != 0; res = res->ai_next) {
-		if (strchr((char *) proto_info->sa_family_list, res->ai_family) == 0) {
+		if (strchr((char *) proto_family_list, res->ai_family) == 0) {
 		    msg_info("skipping address family %d for host %s",
 			     res->ai_family, host);
 		    continue;
 		}
 		found++;
 		if ((addr = dns_sa_to_rr(host, pref, res->ai_addr)) == 0)
-		    msg_fatal("host %s: conversion error for address family %d: %m",
-		    host, ((struct sockaddr *) (res0->ai_addr))->sa_family);
+		    msg_fatal("host %s: conversion error for address family "
+			      "%d: %m", host, res0->ai_addr->sa_family);
 		addr_list = dns_rr_append(addr_list, addr);
 	    }
 	    freeaddrinfo(res0);
@@ -236,6 +252,14 @@ static DNS_RR *smtp_addr_list(DNS_RR *mx_names, DSN_BUF *why)
 {
     DNS_RR *addr_list = 0;
     DNS_RR *rr;
+    int     res_opt = 0;
+
+    if (mx_names->dnssec_valid)
+	res_opt = RES_USE_DNSSEC;
+#ifdef USE_TLS
+    else if (smtp_tls_insecure_mx_policy > TLS_LEV_MAY)
+	res_opt = RES_USE_DNSSEC;
+#endif
 
     /*
      * As long as we are able to look up any host address, we ignore problems
@@ -261,7 +285,8 @@ static DNS_RR *smtp_addr_list(DNS_RR *mx_names, DSN_BUF *why)
     for (rr = mx_names; rr; rr = rr->next) {
 	if (rr->type != T_MX)
 	    msg_panic("smtp_addr_list: bad resource type: %d", rr->type);
-	addr_list = smtp_addr_one(addr_list, (char *) rr->data, rr->pref, why);
+	addr_list = smtp_addr_one(addr_list, (char *) rr->data, res_opt,
+				  rr->pref, why);
     }
     return (addr_list);
 }
@@ -334,16 +359,134 @@ static DNS_RR *smtp_truncate_self(DNS_RR *addr_list, unsigned pref)
     return (addr_list);
 }
 
+/* smtp_balance_inet_proto - balance IPv4/6 protocols within address limit */
+
+static DNS_RR *smtp_balance_inet_proto(DNS_RR *addr_list, int misc_flags,
+				               int addr_limit)
+{
+    const char myname[] = "smtp_balance_inet_proto";
+    DNS_RR *rr;
+    DNS_RR *stripped_list;
+    DNS_RR *next;
+    int     v6_count;
+    int     v4_count;
+    int     v6_target,
+            v4_target;
+    int    *p;
+
+    /*
+     * Precondition: the input is sorted by MX preference (not necessarily IP
+     * address family preference), and addresses with the same or worse
+     * preference than 'myself' have been eliminated. Postcondition: the
+     * relative list order is unchanged, but some elements are removed.
+     */
+
+    /*
+     * Count the number of IPv6 and IPv4 addresses.
+     */
+    for (v4_count = v6_count = 0, rr = addr_list; rr != 0; rr = rr->next) {
+	if (rr->type == T_A) {
+	    v4_count++;
+	} else if (rr->type == T_AAAA) {
+	    v6_count++;
+	} else {
+	    msg_panic("%s: unexpected record type: %s",
+		      myname, dns_strtype(rr->type));
+	}
+    }
+
+    /*
+     * Ensure that one address type will not out-crowd the other, while
+     * enforcing the address count limit. This works around a current problem
+     * where some destination announces primarily IPv6 MX addresses, the
+     * smtp_address_limit eliminates most or all IPv4 addresses, and the
+     * destination is not reachable over IPv6.
+     * 
+     * Maybe: do all smtp_mx_address_limit enforcement here, and remove
+     * pre-existing enforcement elsewhere. That would obsolete the
+     * smtp_balance_inet_protocols configuration parameter.
+     */
+    if (v4_count > 0 && v6_count > 0 && v4_count + v6_count > addr_limit) {
+
+	/*-
+         * Decide how many IPv6 and IPv4 addresses to keep. The code below
+         * has three branches, corresponding to the regions R1, R2 and R3
+         * in the figure.
+         *
+         *  L = addr_limit
+         *  X = excluded by condition (v4_count + v6_count > addr_limit)
+         *
+         * v4_count
+         *     ^
+         *     |
+         *  L  \  R1
+         *     |X\     |
+         *     |XXX\   |
+         *     |XXXXX\ | R2
+         * L/2 +-------\-------
+         *     |XXXXXXX|X\
+         *     |XXXXXXX|XXX\  R3
+         *     |XXXXXXX|XXXXX\
+         *   0 +-------+-------\--> v6_count
+         *     0      L/2      L
+         */
+	if (v6_count <= addr_limit / 2) {	/* Region R1 */
+	    v6_target = v6_count;
+	    v4_target = addr_limit - v6_target;
+	} else if (v4_count <= addr_limit / 2) {/* Region R3 */
+	    v4_target = v4_count;
+	    v6_target = addr_limit - v4_target;
+	} else {				/* Region R2 */
+	    /* v4_count > addr_limit / 2 && v6_count > addr_limit / 2 */
+	    v4_target = (addr_limit + (addr_list->type == T_A)) / 2;
+	    v6_target = addr_limit - v4_target;
+	}
+	if (msg_verbose)
+	    msg_info("v6_target=%d, v4_target=%d", v6_target, v4_target);
+
+	/* Enforce the address count targets. */
+	stripped_list = 0;
+	for (rr = addr_list; rr != 0; rr = next) {
+	    next = rr->next;
+	    rr->next = 0;
+	    if (rr->type == T_A) {
+		p = &v4_target;
+	    } else if (rr->type == T_AAAA) {
+		p = &v6_target;
+	    } else {
+		msg_panic("%s: unexpected record type: %s",
+			  myname, dns_strtype(rr->type));
+	    }
+	    if (*p > 0) {
+		stripped_list = dns_rr_append(stripped_list, rr);
+		*p -= 1;
+	    } else {
+		dns_rr_free(rr);
+	    }
+	}
+	if (v4_target > 0 || v6_target > 0)
+	    msg_panic("%s: bad target count: v4_target=%d, v6_target=%d",
+		      myname, v4_target, v6_target);
+	if (msg_verbose)
+	    smtp_print_addr("smtp_balance_inet_proto result", stripped_list);
+	return (stripped_list);
+    } else {
+	return (addr_list);
+    }
+}
+
 /* smtp_domain_addr - mail exchanger address lookup */
 
-DNS_RR *smtp_domain_addr(char *name, int misc_flags, DSN_BUF *why,
-			         int *found_myself)
+DNS_RR *smtp_domain_addr(const char *name, DNS_RR **mxrr, int misc_flags,
+			         DSN_BUF *why, int *found_myself)
 {
     DNS_RR *mx_names;
     DNS_RR *addr_list = 0;
     DNS_RR *self = 0;
     unsigned best_pref;
     unsigned best_found;
+    int     r = 0;			/* Resolver flags */
+    const char *aname;
 
     dsb_reset(why);				/* Paranoia */
 
@@ -355,8 +498,21 @@ DNS_RR *smtp_domain_addr(char *name, int misc_flags, DSN_BUF *why,
     /*
      * Sanity check.
      */
-    if (var_disable_dns)
+    if (smtp_dns_support == SMTP_DNS_DISABLED)
 	msg_panic("smtp_domain_addr: DNS lookup is disabled");
+    if (smtp_dns_support == SMTP_DNS_DNSSEC)
+	r |= RES_USE_DNSSEC;
+
+    /*
+     * IDNA support.
+     */
+#ifndef NO_EAI
+    if (!allascii(name) && (aname = midna_domain_to_ascii(name)) != 0) {
+	if (msg_verbose)
+	    msg_info("%s asciified to %s", name, aname);
+    } else
+#endif
+	aname = name;
 
     /*
      * Look up the mail exchanger hosts listed for this name. Sort the
@@ -400,26 +556,34 @@ DNS_RR *smtp_domain_addr(char *name, int misc_flags, DSN_BUF *why,
      * at hostnames provides a partial solution for MX hosts behind a NAT
      * gateway.
      */
-    switch (dns_lookup(name, T_MX, 0, &mx_names, (VSTRING *) 0, why->reason)) {
+    switch (dns_lookup(aname, T_MX, r, &mx_names, (VSTRING *) 0, why->reason)) {
     default:
 	dsb_status(why, "4.4.3");
 	if (var_ign_mx_lookup_err)
-	    addr_list = smtp_host_addr(name, misc_flags, why);
+	    addr_list = smtp_host_addr(aname, misc_flags, why);
 	break;
     case DNS_INVAL:
 	dsb_status(why, "5.4.4");
 	if (var_ign_mx_lookup_err)
-	    addr_list = smtp_host_addr(name, misc_flags, why);
+	    addr_list = smtp_host_addr(aname, misc_flags, why);
+	break;
+    case DNS_NULLMX:
+	dsb_status(why, "5.1.0");
+	break;
+    case DNS_POLICY:
+	dsb_status(why, "4.7.0");
 	break;
     case DNS_FAIL:
 	dsb_status(why, "5.4.3");
 	if (var_ign_mx_lookup_err)
-	    addr_list = smtp_host_addr(name, misc_flags, why);
+	    addr_list = smtp_host_addr(aname, misc_flags, why);
 	break;
     case DNS_OK:
 	mx_names = dns_rr_sort(mx_names, dns_rr_compare_pref_any);
 	best_pref = (mx_names ? mx_names->pref : IMPOSSIBLE_PREFERENCE);
 	addr_list = smtp_addr_list(mx_names, why);
+	if (mxrr)
+	    *mxrr = dns_rr_copy(mx_names);	/* copies one record! */
 	dns_rr_free(mx_names);
 	if (addr_list == 0) {
 	    /* Text does not change. */
@@ -455,13 +619,17 @@ DNS_RR *smtp_domain_addr(char *name, int misc_flags, DSN_BUF *why,
 	 ((flags) & SMTP_MISC_FLAG_PREF_IPV4) ? dns_rr_compare_pref_ipv4 : \
 	 dns_rr_compare_pref_any)
 
-	if (addr_list && addr_list->next && var_smtp_rand_addr) {
-	    addr_list = dns_rr_shuffle(addr_list);
+	if (addr_list && addr_list->next) {
+	    if (var_smtp_rand_addr)
+		addr_list = dns_rr_shuffle(addr_list);
 	    addr_list = dns_rr_sort(addr_list, SMTP_COMPARE_ADDR(misc_flags));
+	    if (var_smtp_mxaddr_limit > 0 && var_smtp_balance_inet_proto)
+		addr_list = smtp_balance_inet_proto(addr_list, misc_flags,
+						    var_smtp_mxaddr_limit);
 	}
 	break;
     case DNS_NOTFOUND:
-	addr_list = smtp_host_addr(name, misc_flags, why);
+	addr_list = smtp_host_addr(aname, misc_flags, why);
 	break;
     }
 
@@ -477,15 +645,31 @@ DNS_RR *smtp_domain_addr(char *name, int misc_flags, DSN_BUF *why,
 DNS_RR *smtp_host_addr(const char *host, int misc_flags, DSN_BUF *why)
 {
     DNS_RR *addr_list;
+    int     res_opt = 0;
+    const char *ahost;
 
     dsb_reset(why);				/* Paranoia */
+
+    if (smtp_dns_support == SMTP_DNS_DNSSEC)
+	res_opt |= RES_USE_DNSSEC;
+
+    /*
+     * IDNA support.
+     */
+#ifndef NO_EAI
+    if (!allascii(host) && (ahost = midna_domain_to_ascii(host)) != 0) {
+	if (msg_verbose)
+	    msg_info("%s asciified to %s", host, ahost);
+    } else
+#endif
+	ahost = host;
 
     /*
      * If the host is specified by numerical address, just convert the
      * address to internal form. Otherwise, the host is specified by name.
      */
 #define PREF0	0
-    addr_list = smtp_addr_one((DNS_RR *) 0, host, PREF0, why);
+    addr_list = smtp_addr_one((DNS_RR *) 0, ahost, res_opt, PREF0, why);
     if (addr_list
 	&& (misc_flags & SMTP_MISC_FLAG_LOOP_DETECT)
 	&& smtp_find_self(addr_list) != 0) {
@@ -499,6 +683,9 @@ DNS_RR *smtp_host_addr(const char *host, int misc_flags, DSN_BUF *why)
 	/* The following changes the order of equal-preference hosts. */
 	if (inet_proto_info()->ai_family_list[1] != 0)
 	    addr_list = dns_rr_sort(addr_list, SMTP_COMPARE_ADDR(misc_flags));
+	if (var_smtp_mxaddr_limit > 0 && var_smtp_balance_inet_proto)
+	    addr_list = smtp_balance_inet_proto(addr_list, misc_flags,
+						var_smtp_mxaddr_limit);
     }
     if (msg_verbose)
 	smtp_print_addr(host, addr_list);

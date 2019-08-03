@@ -39,6 +39,106 @@
 #include <tls.h>
 
  /*
+  * tlsproxy client.
+  */
+#include <tls_proxy.h>
+
+ /*
+  * Global iterator support. This is updated by the connection-management
+  * loop, and contains dynamic context that appears in lookup keys for SASL
+  * passwords, TLS policy, cached SMTP connections, and cached TLS session
+  * keys.
+  * 
+  * For consistency and maintainability, context that is used in more than one
+  * lookup key is formatted with smtp_key_format().
+  */
+typedef struct SMTP_ITERATOR {
+    /* Public members. */
+    VSTRING *request_nexthop;		/* delivery request nexhop or empty */
+    VSTRING *dest;			/* current nexthop */
+    VSTRING *host;			/* hostname or empty */
+    VSTRING *addr;			/* printable address or empty */
+    unsigned port;			/* network byte order or null */
+    struct DNS_RR *rr;			/* DNS resource record or null */
+    struct DNS_RR *mx;			/* DNS resource record or null */
+    /* Private members. */
+    VSTRING *saved_dest;		/* saved current nexthop */
+    struct SMTP_STATE *parent;		/* parent linkage */
+} SMTP_ITERATOR;
+
+#define SMTP_ITER_INIT(iter, _dest, _host, _addr, _port, state) do { \
+	vstring_strcpy((iter)->dest, (_dest)); \
+	vstring_strcpy((iter)->host, (_host)); \
+	vstring_strcpy((iter)->addr, (_addr)); \
+	(iter)->port = (_port); \
+	(iter)->mx = (iter)->rr = 0; \
+	vstring_strcpy((iter)->saved_dest, ""); \
+	(iter)->parent = (state); \
+    } while (0)
+
+#define SMTP_ITER_SAVE_DEST(iter) do { \
+	vstring_strcpy((iter)->saved_dest, STR((iter)->dest)); \
+    } while (0)
+
+#define SMTP_ITER_RESTORE_DEST(iter) do { \
+	vstring_strcpy((iter)->dest, STR((iter)->saved_dest)); \
+    } while (0)
+
+ /*
+  * TLS Policy support.
+  */
+#ifdef USE_TLS
+
+typedef struct SMTP_TLS_POLICY {
+    int     level;			/* TLS enforcement level */
+    char   *protocols;			/* Acceptable SSL protocols */
+    char   *grade;			/* Cipher grade: "export", ... */
+    VSTRING *exclusions;		/* Excluded SSL ciphers */
+    ARGV   *matchargv;			/* Cert match patterns */
+    DSN_BUF *why;			/* Lookup error status */
+    TLS_DANE *dane;			/* DANE TLSA digests */
+    char   *sni;			/* Optional SNI name when not DANE */
+    int     conn_reuse;			/* enable connection reuse */
+} SMTP_TLS_POLICY;
+
+ /*
+  * smtp_tls_policy.c
+  */
+extern void smtp_tls_list_init(void);
+extern int smtp_tls_policy_cache_query(DSN_BUF *, SMTP_TLS_POLICY *, SMTP_ITERATOR *);
+extern void smtp_tls_policy_cache_flush(void);
+
+ /*
+  * Macros must use distinct names for local temporary variables, otherwise
+  * there will be bugs due to shadowing. This happened when an earlier
+  * version of smtp_tls_policy_dummy() invoked smtp_tls_policy_init(), but it
+  * could also happen without macro nesting.
+  * 
+  * General principle: use all or part of the macro name in each temporary
+  * variable name. Then, append suffixes to the names if needed.
+  */
+#define smtp_tls_policy_dummy(t) do { \
+	SMTP_TLS_POLICY *_tls_policy_dummy_tmp = (t); \
+	smtp_tls_policy_init(_tls_policy_dummy_tmp, (DSN_BUF *) 0); \
+	_tls_policy_dummy_tmp->level = TLS_LEV_NONE; \
+    } while (0)
+
+ /* This macro is not part of the module external interface. */
+#define smtp_tls_policy_init(t, w) do { \
+	SMTP_TLS_POLICY *_tls_policy_init_tmp = (t); \
+	_tls_policy_init_tmp->protocols = 0; \
+	_tls_policy_init_tmp->grade = 0; \
+	_tls_policy_init_tmp->exclusions = 0; \
+	_tls_policy_init_tmp->matchargv = 0; \
+	_tls_policy_init_tmp->why = (w); \
+	_tls_policy_init_tmp->dane = 0; \
+	_tls_policy_init_tmp->sni = 0; \
+	_tls_policy_init_tmp->conn_reuse = 0; \
+    } while (0)
+
+#endif
+
+ /*
   * State information associated with each SMTP delivery request.
   * Session-specific state is stored separately.
   */
@@ -52,23 +152,25 @@ typedef struct SMTP_STATE {
     ssize_t space_left;			/* output length control */
 
     /*
-     * Connection cache support. The (nexthop_lookup_mx, nexthop_domain,
-     * nexthop_port) triple is a parsed next-hop specification, and should be
-     * a data type by itself. The (service, nexthop_mumble) members specify
-     * the name under which the first good connection should be cached. The
-     * nexthop_mumble members are initialized by the connection management
-     * module. nexthop_domain is reset to null after one connection is saved
-     * under the (service, nexthop_mumble) label, or upon exit from the
-     * connection management module.
+     * Global iterator.
+     */
+    SMTP_ITERATOR iterator[1];		/* Usage: state->iterator->member */
+
+    /*
+     * Global iterator.
+     */
+#ifdef USE_TLS
+    SMTP_TLS_POLICY tls[1];		/* Usage: state->tls->member */
+#endif
+
+    /*
+     * Connection cache support.
      */
     HTABLE *cache_used;			/* cached addresses that were used */
     VSTRING *dest_label;		/* cached logical/physical binding */
     VSTRING *dest_prop;			/* binding properties, passivated */
     VSTRING *endp_label;		/* cached session physical endpoint */
     VSTRING *endp_prop;			/* endpoint properties, passivated */
-    int     nexthop_lookup_mx;		/* do/don't MX expand nexthop_domain */
-    char   *nexthop_domain;		/* next-hop name or bare address */
-    unsigned nexthop_port;		/* next-hop TCP port, network order */
 
     /*
      * Flags and counters to control the handling of mail delivery errors.
@@ -85,18 +187,27 @@ typedef struct SMTP_STATE {
     DSN_BUF *why;			/* on-the-fly formatting buffer */
 } SMTP_STATE;
 
-#define SET_NEXTHOP_STATE(state, lookup_mx, domain, port) { \
-	(state)->nexthop_lookup_mx = lookup_mx; \
-	(state)->nexthop_domain = mystrdup(domain); \
-	(state)->nexthop_port = port; \
-    }
+ /*
+  * Primitives to enable/disable/test connection caching and reuse based on
+  * the delivery request next-hop destination (i.e. not smtp_fallback_relay).
+  * 
+  * Connection cache lookup by the delivery request next-hop destination allows
+  * a reuse request to skip over bad hosts, and may result in a connection to
+  * a fall-back relay. Once we have found a 'good' host for a delivery
+  * request next-hop, clear the delivery request next-hop destination, to
+  * avoid caching less-preferred connections under that same delivery request
+  * next-hop.
+  */
+#define SET_SCACHE_REQUEST_NEXTHOP(state, nexthop) do { \
+	vstring_strcpy((state)->iterator->request_nexthop, nexthop); \
+    } while (0)
 
-#define FREE_NEXTHOP_STATE(state) { \
-	myfree((state)->nexthop_domain); \
-	(state)->nexthop_domain = 0; \
-    }
+#define CLEAR_SCACHE_REQUEST_NEXTHOP(state) do { \
+	STR((state)->iterator->request_nexthop)[0] = 0; \
+    } while (0)
 
-#define HAVE_NEXTHOP_STATE(state) ((state)->nexthop_domain != 0)
+#define HAVE_SCACHE_REQUEST_NEXTHOP(state) \
+	(STR((state)->iterator->request_nexthop)[0] != 0)
 
 
  /*
@@ -122,6 +233,8 @@ typedef struct SMTP_STATE {
 #define SMTP_FEATURE_XFORWARD_PORT	(1<<18)
 #define SMTP_FEATURE_EARLY_TLS_MAIL_REPLY (1<<19)	/* CVE-2009-3555 */
 #define SMTP_FEATURE_XFORWARD_IDENT	(1<<20)
+#define SMTP_FEATURE_SMTPUTF8		(1<<21)	/* RFC 6531 */
+#define SMTP_FEATURE_FROM_PROXY		(1<<22)	/* proxied connection */
 
  /*
   * Features that passivate under the endpoint.
@@ -140,15 +253,14 @@ typedef struct SMTP_STATE {
   */
 #define SMTP_MISC_FLAG_LOOP_DETECT	(1<<0)
 #define	SMTP_MISC_FLAG_IN_STARTTLS	(1<<1)
-#define SMTP_MISC_FLAG_USE_LMTP		(1<<2)
-#define SMTP_MISC_FLAG_FIRST_NEXTHOP	(1<<3)
-#define SMTP_MISC_FLAG_FINAL_NEXTHOP	(1<<4)
-#define SMTP_MISC_FLAG_FINAL_SERVER	(1<<5)
-#define SMTP_MISC_FLAG_CONN_LOAD	(1<<6)
-#define SMTP_MISC_FLAG_CONN_STORE	(1<<7)
-#define SMTP_MISC_FLAG_COMPLETE_SESSION	(1<<8)
-#define SMTP_MISC_FLAG_PREF_IPV6	(1<<9)
-#define SMTP_MISC_FLAG_PREF_IPV4	(1<<10)
+#define SMTP_MISC_FLAG_FIRST_NEXTHOP	(1<<2)
+#define SMTP_MISC_FLAG_FINAL_NEXTHOP	(1<<3)
+#define SMTP_MISC_FLAG_FINAL_SERVER	(1<<4)
+#define SMTP_MISC_FLAG_CONN_LOAD	(1<<5)
+#define SMTP_MISC_FLAG_CONN_STORE	(1<<6)
+#define SMTP_MISC_FLAG_COMPLETE_SESSION	(1<<7)
+#define SMTP_MISC_FLAG_PREF_IPV6	(1<<8)
+#define SMTP_MISC_FLAG_PREF_IPV4	(1<<9)
 
 #define SMTP_MISC_FLAG_CONN_CACHE_MASK \
 	(SMTP_MISC_FLAG_CONN_LOAD | SMTP_MISC_FLAG_CONN_STORE)
@@ -170,6 +282,13 @@ extern int smtp_host_lookup_mask;	/* host lookup methods to use */
 #define SMTP_HOST_FLAG_DNS	(1<<0)
 #define SMTP_HOST_FLAG_NATIVE	(1<<1)
 
+extern int smtp_dns_support;		/* dns support level */
+
+#define SMTP_DNS_INVALID	(-1)	/* smtp_dns_support_level = <bogus> */
+#define SMTP_DNS_DISABLED	0	/* smtp_dns_support_level = disabled */
+#define SMTP_DNS_ENABLED	1	/* smtp_dns_support_level = enabled */
+#define SMTP_DNS_DNSSEC		2	/* smtp_dns_support_level = dnssec */
+
 extern SCACHE *smtp_scache;		/* connection cache instance */
 extern STRING_LIST *smtp_cache_dest;	/* cached destinations */
 
@@ -184,6 +303,7 @@ extern unsigned smtp_dns_res_opt;	/* DNS query flags */
 #ifdef USE_TLS
 
 extern TLS_APPL_STATE *smtp_tls_ctx;	/* client-side TLS engine */
+extern int smtp_tls_insecure_mx_policy;	/* DANE post insecure MX? */
 
 #endif
 
@@ -193,11 +313,10 @@ extern HBC_CHECKS *smtp_body_checks;	/* limited body checks */
  /*
   * smtp_session.c
   */
+
 typedef struct SMTP_SESSION {
     VSTREAM *stream;			/* network connection */
-    char   *dest;			/* nexthop or fallback */
-    char   *host;			/* mail exchanger */
-    char   *addr;			/* mail exchanger */
+    SMTP_ITERATOR *iterator;		/* dest, host, addr, port */
     char   *namaddr;			/* mail exchanger */
     char   *helo;			/* helo response */
     unsigned port;			/* network byte order */
@@ -218,7 +337,7 @@ typedef struct SMTP_SESSION {
 
     time_t  expire_time;		/* session reuse expiration time */
     int     reuse_count;		/* # of times reused (for logging) */
-    int     dead;			/* No further I/O allowed */
+    int     forbidden;			/* No further I/O allowed */
 
 #ifdef USE_SASL_AUTH
     char   *sasl_mechanism_list;	/* server mechanism list */
@@ -232,29 +351,20 @@ typedef struct SMTP_SESSION {
      * TLS related state, don't forget to initialize in session_tls_init()!
      */
 #ifdef USE_TLS
-    TLS_SESS_STATE *tls_context;	/* TLS session state */
+    TLS_SESS_STATE *tls_context;	/* TLS library session state */
     char   *tls_nexthop;		/* Nexthop domain for cert checks */
-    int     tls_level;			/* TLS enforcement level */
     int     tls_retry_plain;		/* Try plain when TLS handshake fails */
-    char   *tls_protocols;		/* Acceptable SSL protocols */
-    char   *tls_grade;			/* Cipher grade: "export", ... */
-    VSTRING *tls_exclusions;		/* Excluded SSL ciphers */
-    ARGV   *tls_matchargv;		/* Cert match patterns */
 #endif
 
     SMTP_STATE *state;			/* back link */
 } SMTP_SESSION;
 
-extern SMTP_SESSION *smtp_session_alloc(VSTREAM *, const char *, const char *,
-			               const char *, unsigned, time_t, int);
+extern SMTP_SESSION *smtp_session_alloc(VSTREAM *, SMTP_ITERATOR *, time_t, int);
+extern void smtp_session_new_stream(SMTP_SESSION *, VSTREAM *, time_t, int);
+extern int smtp_sess_plaintext_ok(SMTP_ITERATOR *, int);
 extern void smtp_session_free(SMTP_SESSION *);
 extern int smtp_session_passivate(SMTP_SESSION *, VSTRING *, VSTRING *);
-extern SMTP_SESSION *smtp_session_activate(int, VSTRING *, VSTRING *);
-
-#ifdef USE_TLS
-extern void smtp_tls_list_init(void);
-
-#endif
+extern SMTP_SESSION *smtp_session_activate(int, SMTP_ITERATOR *, VSTRING *, VSTRING *);
 
  /*
   * What's in a name?
@@ -269,6 +379,7 @@ extern int smtp_connect(SMTP_STATE *);
  /*
   * smtp_proto.c
   */
+extern void smtp_vrfy_init(void);
 extern int smtp_helo(SMTP_STATE *);
 extern int smtp_xfer(SMTP_STATE *);
 extern int smtp_rset(SMTP_STATE *);
@@ -297,7 +408,7 @@ extern HBC_CALL_BACKS smtp_hbc_callbacks[];
   * at completely different times.
   * 
   * We "freeze" the choice in the sender loop, just before we generate "." or
-  * "RSET". The reader loop leaves the connection cachable even if the timer
+  * "RSET". The reader loop leaves the connection cacheable even if the timer
   * expires by the time the response arrives. The connection cleanup code
   * will call smtp_quit() for connections with an expired cache expiration
   * timer.
@@ -320,33 +431,35 @@ extern HBC_CALL_BACKS smtp_hbc_callbacks[];
   * connections and other reasons why connections cannot be cached.
   */
 #define THIS_SESSION_IS_CACHED \
-	(!THIS_SESSION_IS_DEAD && session->expire_time > 0)
+	(!THIS_SESSION_IS_FORBIDDEN && session->expire_time > 0)
 
 #define THIS_SESSION_IS_EXPIRED \
 	(THIS_SESSION_IS_CACHED \
-	    && session->expire_time < vstream_ftime(session->stream))
+	    && (session->expire_time < vstream_ftime(session->stream) \
+		|| (var_smtp_reuse_count > 0 \
+		    && session->reuse_count >= var_smtp_reuse_count)))
 
-#define THIS_SESSION_IS_BAD \
-	(!THIS_SESSION_IS_DEAD && session->expire_time < 0)
+#define THIS_SESSION_IS_THROTTLED \
+	(!THIS_SESSION_IS_FORBIDDEN && session->expire_time < 0)
 
-#define THIS_SESSION_IS_DEAD \
-	(session->dead != 0)
+#define THIS_SESSION_IS_FORBIDDEN \
+	(session->forbidden != 0)
 
  /* Bring the bad news. */
 
 #define DONT_CACHE_THIS_SESSION \
 	(session->expire_time = 0)
 
-#define DONT_CACHE_BAD_SESSION \
+#define DONT_CACHE_THROTTLED_SESSION \
 	(session->expire_time = -1)
 
-#define DONT_USE_DEAD_SESSION \
-	(session->dead = 1)
+#define DONT_USE_FORBIDDEN_SESSION \
+	(session->forbidden = 1)
 
  /* Initialization. */
 
 #define USE_NEWBORN_SESSION \
-	(session->dead = 0)
+	(session->forbidden = 0)
 
 #define CACHE_THIS_SESSION_UNTIL(when) \
 	(session->expire_time = (when))
@@ -354,6 +467,37 @@ extern HBC_CALL_BACKS smtp_hbc_callbacks[];
  /*
   * Encapsulate the following so that we don't expose details of of
   * connection management and error handling to the SMTP protocol engine.
+  */
+#ifdef USE_SASL_AUTH
+#define HAVE_SASL_CREDENTIALS \
+	(var_smtp_sasl_enable \
+	     && *var_smtp_sasl_passwd \
+	     && smtp_sasl_passwd_lookup(session))
+#else
+#define HAVE_SASL_CREDENTIALS	(0)
+#endif
+
+#define PREACTIVE_DELAY \
+	(session->state->request->msg_stats.active_arrival.tv_sec - \
+	 session->state->request->msg_stats.incoming_arrival.tv_sec)
+
+#define PLAINTEXT_FALLBACK_OK_AFTER_STARTTLS_FAILURE \
+	(session->tls_context == 0 \
+	    && state->tls->level == TLS_LEV_MAY \
+	    && PREACTIVE_DELAY >= var_min_backoff_time \
+	    && !HAVE_SASL_CREDENTIALS)
+
+#define PLAINTEXT_FALLBACK_OK_AFTER_TLS_SESSION_FAILURE \
+	(session->tls_context != 0 \
+	    && SMTP_RCPT_LEFT(state) > SMTP_RCPT_MARK_COUNT(state) \
+	    && state->tls->level == TLS_LEV_MAY \
+	    && PREACTIVE_DELAY >= var_min_backoff_time \
+	    && !HAVE_SASL_CREDENTIALS)
+
+ /*
+  * XXX The following will not retry recipients that were deferred while the
+  * SMTP_MISC_FLAG_FINAL_SERVER flag was already set. This includes the case
+  * when TLS fails in the middle of a delivery.
   */
 #define RETRY_AS_PLAINTEXT do { \
 	session->tls_retry_plain = 1; \
@@ -385,6 +529,11 @@ extern void smtp_chat_notify(SMTP_SESSION *);
      (resp))
 
 #define DSN_BY_LOCAL_MTA	((char *) 0)	/* DSN issued by local MTA */
+
+#define SMTP_RESP_SET_DSN(resp, _dsn) do { \
+	vstring_strcpy((resp)->dsn_buf, (_dsn)); \
+	(resp)->dsn = STR((resp)->dsn_buf); \
+    } while (0)
 
  /*
   * These operations implement a redundant mark-and-sweep algorithm that
@@ -424,21 +573,28 @@ extern void smtp_chat_notify(SMTP_SESSION *);
 
 #define SMTP_RCPT_LEFT(state) (state)->rcpt_left
 
+#define SMTP_RCPT_MARK_COUNT(state) ((state)->rcpt_drop + (state)->rcpt_keep)
+
 extern void smtp_rcpt_cleanup(SMTP_STATE *);
 extern void smtp_rcpt_done(SMTP_STATE *, SMTP_RESP *, RECIPIENT *);
 
  /*
   * smtp_trouble.c
   */
+#define SMTP_THROTTLE	1
+#define SMTP_NOTHROTTLE	0
 extern int smtp_sess_fail(SMTP_STATE *);
-extern int PRINTFLIKE(4, 5) smtp_site_fail(SMTP_STATE *, const char *,
-				             SMTP_RESP *, const char *,...);
-extern int PRINTFLIKE(4, 5) smtp_mesg_fail(SMTP_STATE *, const char *,
+extern int PRINTFLIKE(5, 6) smtp_misc_fail(SMTP_STATE *, int, const char *,
 				             SMTP_RESP *, const char *,...);
 extern void PRINTFLIKE(5, 6) smtp_rcpt_fail(SMTP_STATE *, RECIPIENT *,
 					          const char *, SMTP_RESP *,
 					            const char *,...);
 extern int smtp_stream_except(SMTP_STATE *, int, const char *);
+
+#define smtp_site_fail(state, mta, resp, ...) \
+	smtp_misc_fail((state), SMTP_THROTTLE, (mta), (resp), __VA_ARGS__)
+#define smtp_mesg_fail(state, mta, resp, ...) \
+	smtp_misc_fail((state), SMTP_NOTHROTTLE, (mta), (resp), __VA_ARGS__)
 
  /*
   * smtp_unalias.c
@@ -460,10 +616,89 @@ extern int smtp_map11_tree(TOK822 *, MAPS *, int);
 extern int smtp_map11_internal(VSTRING *, MAPS *, int);
 
  /*
+  * smtp_key.c
+  */
+char   *smtp_key_prefix(VSTRING *, const char *, SMTP_ITERATOR *, int);
+
+#define SMTP_KEY_FLAG_SERVICE		(1<<0)	/* service name */
+#define SMTP_KEY_FLAG_SENDER		(1<<1)	/* sender address */
+#define SMTP_KEY_FLAG_REQ_NEXTHOP	(1<<2)	/* delivery request nexthop */
+#define SMTP_KEY_FLAG_CUR_NEXTHOP	(1<<3)	/* current nexthop */
+#define SMTP_KEY_FLAG_HOSTNAME		(1<<4)	/* remote host name */
+#define SMTP_KEY_FLAG_ADDR		(1<<5)	/* remote address */
+#define SMTP_KEY_FLAG_PORT		(1<<6)	/* remote port */
+#define SMTP_KEY_FLAG_TLS_LEVEL		(1<<7)	/* requested TLS level */
+
+#define SMTP_KEY_MASK_ALL \
+	(SMTP_KEY_FLAG_SERVICE | SMTP_KEY_FLAG_SENDER | \
+	SMTP_KEY_FLAG_REQ_NEXTHOP | \
+	SMTP_KEY_FLAG_CUR_NEXTHOP | SMTP_KEY_FLAG_HOSTNAME | \
+	SMTP_KEY_FLAG_ADDR | SMTP_KEY_FLAG_PORT | SMTP_KEY_FLAG_TLS_LEVEL)
+
+ /*
+  * Conditional lookup-key flags for cached connections that may be
+  * SASL-authenticated with a per-{sender, nexthop, or hostname} credential.
+  * Each bit corresponds to one type of smtp_sasl_password_file lookup key,
+  * and is turned on only when the corresponding main.cf parameter is turned
+  * on.
+  */
+#define COND_SASL_SMTP_KEY_FLAG_SENDER \
+	((var_smtp_sender_auth && *var_smtp_sasl_passwd) ? \
+	    SMTP_KEY_FLAG_SENDER : 0)
+
+#define COND_SASL_SMTP_KEY_FLAG_CUR_NEXTHOP \
+	(*var_smtp_sasl_passwd ? SMTP_KEY_FLAG_CUR_NEXTHOP : 0)
+
+#ifdef USE_TLS
+#define COND_TLS_SMTP_KEY_FLAG_CUR_NEXTHOP \
+	(TLS_MUST_MATCH(state->tls->level) ? SMTP_KEY_FLAG_CUR_NEXTHOP : 0)
+#else
+#define COND_TLS_SMTP_KEY_FLAG_CUR_NEXTHOP \
+	(0)
+#endif
+
+#define COND_SASL_SMTP_KEY_FLAG_HOSTNAME \
+	(*var_smtp_sasl_passwd ? SMTP_KEY_FLAG_HOSTNAME : 0)
+
+ /*
+  * Connection-cache destination lookup key, based on the delivery request
+  * nexthop. The SENDER attribute is a proxy for sender-dependent SASL
+  * credentials (or absence thereof), and prevents false connection sharing
+  * when different SASL credentials may be required for different deliveries
+  * to the same domain and port. Likewise, the delivery request nexthop
+  * (REQ_NEXTHOP) prevents false sharing of TLS identities (the destination
+  * key links only to appropriate endpoint lookup keys). The SERVICE
+  * attribute is a proxy for all request-independent configuration details.
+  */
+#define SMTP_KEY_MASK_SCACHE_DEST_LABEL \
+	(SMTP_KEY_FLAG_SERVICE | COND_SASL_SMTP_KEY_FLAG_SENDER \
+	| SMTP_KEY_FLAG_REQ_NEXTHOP)
+
+ /*
+  * Connection-cache endpoint lookup key. The SENDER, CUR_NEXTHOP, HOSTNAME,
+  * PORT and TLS_LEVEL attributes are proxies for SASL credentials and TLS
+  * authentication (or absence thereof), and prevent false connection sharing
+  * when different SASL credentials or TLS identities may be required for
+  * different deliveries to the same IP address and port. The SERVICE
+  * attribute is a proxy for all request-independent configuration details.
+  */
+#define SMTP_KEY_MASK_SCACHE_ENDP_LABEL \
+	(SMTP_KEY_FLAG_SERVICE | COND_SASL_SMTP_KEY_FLAG_SENDER \
+	| COND_SASL_SMTP_KEY_FLAG_CUR_NEXTHOP \
+	| COND_SASL_SMTP_KEY_FLAG_HOSTNAME \
+	| COND_TLS_SMTP_KEY_FLAG_CUR_NEXTHOP | SMTP_KEY_FLAG_ADDR | \
+	SMTP_KEY_FLAG_PORT | SMTP_KEY_FLAG_TLS_LEVEL)
+
+ /*
   * Silly little macros.
   */
 #define STR(s) vstring_str(s)
 #define LEN(s) VSTRING_LEN(s)
+
+extern int smtp_mode;
+
+#define VAR_LMTP_SMTP(x) (smtp_mode ? VAR_SMTP_##x : VAR_LMTP_##x)
+#define LMTP_SMTP_SUFFIX(x) (smtp_mode ? x##_SMTP : x##_LMTP)
 
 /* LICENSE
 /* .ad
@@ -475,10 +710,18 @@ extern int smtp_map11_internal(VSTRING *, MAPS *, int);
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
 /*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
+/*
 /*	TLS support originally by:
 /*	Lutz Jaenicke
 /*	BTU Cottbus
 /*	Allgemeine Elektrotechnik
 /*	Universitaetsplatz 3-4
 /*	D-03044 Cottbus, Germany
+/*
+/*	Victor Duchovni
+/*	Morgan Stanley
 /*--*/

@@ -18,16 +18,8 @@
 /*	void	resolve_clnt_init(reply)
 /*	RESOLVE_REPLY *reply;
 /*
-/*	void	resolve_clnt_query(address, reply)
-/*	const char *address;
-/*	RESOLVE_REPLY *reply;
-/*
 /*	void	resolve_clnt_query_from(sender, address, reply)
 /*	const char *sender;
-/*	const char *address;
-/*	RESOLVE_REPLY *reply;
-/*
-/*	void	resolve_clnt_verify(address, reply)
 /*	const char *address;
 /*	RESOLVE_REPLY *reply;
 /*
@@ -45,18 +37,16 @@
 /*	by resolve_clnt_query(). The structure is destroyed by passing
 /*	it to resolve_clnt_free().
 /*
-/*	resolve_clnt_query() sends an internal-form recipient address
+/*	resolve_clnt_query_from() sends an internal-form recipient address
 /*	(user@domain) to the resolver daemon and returns the resulting
 /*	transport name, next_hop host name, and internal-form recipient
 /*	address. In case of communication failure the program keeps trying
-/*	until the mail system goes down.
+/*	until the mail system goes down. The internal-form sender
+/*	information is used for sender-dependent relayhost lookup.
+/*	Specify RESOLVE_NULL_FROM when the sender is unavailable.
 /*
-/*	resolve_clnt_verify() implements an alternative version that can
+/*	resolve_clnt_verify_from() implements an alternative version that can
 /*	be used for address verification.
-/*
-/*	resolve_clnt_query_from() and resolve_clnt_verify_from()
-/*	allow the caller to supply sender context that will be used
-/*	for sender-dependent relayhost lookup.
 /*
 /*	In the resolver reply, the flags member is the bit-wise OR of
 /*	zero or more of the following:
@@ -109,6 +99,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -231,17 +226,17 @@ void    resolve_clnt(const char *class, const char *sender,
 	errno = 0;
 	count += 1;
 	if (attr_print(stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_STR, MAIL_ATTR_REQ, class,
-		       ATTR_TYPE_STR, MAIL_ATTR_SENDER, sender,
-		       ATTR_TYPE_STR, MAIL_ATTR_ADDR, addr,
+		       SEND_ATTR_STR(MAIL_ATTR_REQ, class),
+		       SEND_ATTR_STR(MAIL_ATTR_SENDER, sender),
+		       SEND_ATTR_STR(MAIL_ATTR_ADDR, addr),
 		       ATTR_TYPE_END) != 0
 	    || vstream_fflush(stream)
 	    || attr_scan(stream, ATTR_FLAG_STRICT,
-			 ATTR_TYPE_INT, MAIL_ATTR_FLAGS, &server_flags,
-		       ATTR_TYPE_STR, MAIL_ATTR_TRANSPORT, reply->transport,
-			 ATTR_TYPE_STR, MAIL_ATTR_NEXTHOP, reply->nexthop,
-			 ATTR_TYPE_STR, MAIL_ATTR_RECIP, reply->recipient,
-			 ATTR_TYPE_INT, MAIL_ATTR_FLAGS, &reply->flags,
+			 RECV_ATTR_INT(MAIL_ATTR_FLAGS, &server_flags),
+		       RECV_ATTR_STR(MAIL_ATTR_TRANSPORT, reply->transport),
+			 RECV_ATTR_STR(MAIL_ATTR_NEXTHOP, reply->nexthop),
+			 RECV_ATTR_STR(MAIL_ATTR_RECIP, reply->recipient),
+			 RECV_ATTR_INT(MAIL_ATTR_FLAGS, &reply->flags),
 			 ATTR_TYPE_END) != 5) {
 	    if (msg_verbose || count > 1 || (errno && errno != EPIPE && errno != ENOENT))
 		msg_warn("problem talking to service %s: %m",
@@ -386,8 +381,11 @@ int     main(int argc, char **argv)
 	VSTRING *buffer = vstring_alloc(1);
 
 	while (vstring_fgets_nonl(buffer, VSTREAM_IN)) {
-	    if ((addr = split_at(STR(buffer), ' ')) == 0 || *STR(buffer) == 0)
-		msg_fatal("need as input: class address");
+	    addr = split_at(STR(buffer), ' ');
+	    if (*STR(buffer) == 0)
+		msg_fatal("need as input: class [address]");
+	    if (addr == 0)
+		addr = "";
 	    resolve(STR(buffer), addr, &reply);
 	}
 	vstring_free(buffer);

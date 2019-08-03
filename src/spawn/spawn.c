@@ -43,7 +43,7 @@
 /*	replaced by a more structural solution.
 /* DIAGNOSTICS
 /*	The \fBspawn\fR(8) daemon reports abnormal child exits.
-/*	Problems are logged to \fBsyslogd\fR(8).
+/*	Problems are logged to \fBsyslogd\fR(8) or \fBpostlogd\fR(8).
 /* SECURITY
 /* .fi
 /* .ad
@@ -66,13 +66,10 @@
 /* RESOURCE AND RATE CONTROL
 /* .ad
 /* .fi
-/* .IP "\fItransport\fB_time_limit ($command_time_limit)\fR"
-/*	The amount of time the command is allowed to run before it is
-/*	terminated.
-/*
-/*	Postfix 2.4 and later support a suffix that specifies the
-/*	time unit: s (seconds), m (minutes), h (hours), d (days),
-/*	w (weeks). The default time unit is seconds.
+/* .IP "\fBtransport_time_limit ($command_time_limit)\fR"
+/*	A transport-specific override for the command_time_limit parameter
+/*	value, where \fItransport\fR is the master.cf name of the message
+/*	delivery transport.
 /* MISCELLANEOUS
 /* .ad
 /* .fi
@@ -106,11 +103,16 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* SEE ALSO
 /*	postconf(5), configuration parameters
 /*	master(8), process manager
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* LICENSE
 /* .ad
@@ -121,6 +123,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -157,6 +164,7 @@
 #include <mail_params.h>
 #include <mail_server.h>
 #include <mail_conf.h>
+#include <mail_parm_split.h>
 
 /* Application-specific. */
 
@@ -296,16 +304,16 @@ static void spawn_service(VSTREAM *client_stream, char *service, char **argv)
     /*
      * Execute the command.
      */
-    export_env = argv_split(var_export_environ, ", \t\r\n");
-    status = spawn_command(SPAWN_CMD_STDIN, vstream_fileno(client_stream),
-			   SPAWN_CMD_STDOUT, vstream_fileno(client_stream),
-			   SPAWN_CMD_STDERR, vstream_fileno(client_stream),
-			   SPAWN_CMD_UID, attr.uid,
-			   SPAWN_CMD_GID, attr.gid,
-			   SPAWN_CMD_ARGV, attr.argv,
-			   SPAWN_CMD_TIME_LIMIT, attr.time_limit,
-			   SPAWN_CMD_EXPORT, export_env->argv,
-			   SPAWN_CMD_END);
+    export_env = mail_parm_split(VAR_EXPORT_ENVIRON, var_export_environ);
+    status = spawn_command(CA_SPAWN_CMD_STDIN(vstream_fileno(client_stream)),
+			 CA_SPAWN_CMD_STDOUT(vstream_fileno(client_stream)),
+			 CA_SPAWN_CMD_STDERR(vstream_fileno(client_stream)),
+			   CA_SPAWN_CMD_UID(attr.uid),
+			   CA_SPAWN_CMD_GID(attr.gid),
+			   CA_SPAWN_CMD_ARGV(attr.argv),
+			   CA_SPAWN_CMD_TIME_LIMIT(attr.time_limit),
+			   CA_SPAWN_CMD_EXPORT(export_env->argv),
+			   CA_SPAWN_CMD_END);
     argv_free(export_env);
 
     /*
@@ -357,9 +365,9 @@ int     main(int argc, char **argv)
     MAIL_VERSION_STAMP_ALLOCATE;
 
     single_server_main(argc, argv, spawn_service,
-		       MAIL_SERVER_TIME_TABLE, time_table,
-		       MAIL_SERVER_POST_INIT, drop_privileges,
-		       MAIL_SERVER_PRE_ACCEPT, pre_accept,
-		       MAIL_SERVER_PRIVILEGED,
+		       CA_MAIL_SERVER_TIME_TABLE(time_table),
+		       CA_MAIL_SERVER_POST_INIT(drop_privileges),
+		       CA_MAIL_SERVER_PRE_ACCEPT(pre_accept),
+		       CA_MAIL_SERVER_PRIVILEGED,
 		       0);
 }

@@ -89,6 +89,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
  /*
@@ -158,6 +163,7 @@ int     smtp_sasl_passwd_lookup(SMTP_SESSION *session)
 {
     const char *myname = "smtp_sasl_passwd_lookup";
     SMTP_STATE *state = session->state;
+    SMTP_ITERATOR *iter = session->iterator;
     const char *value;
     char   *passwd;
 
@@ -181,16 +187,16 @@ int     smtp_sasl_passwd_lookup(SMTP_SESSION *session)
      * the MX hostname.
      */
     smtp_sasl_passwd_map->error = 0;
-    if (((state->misc_flags & SMTP_MISC_FLAG_USE_LMTP) == 0
+    if ((smtp_mode
 	 && var_smtp_sender_auth && state->request->sender[0]
 	 && (value = mail_addr_find(smtp_sasl_passwd_map,
 				 state->request->sender, (char **) 0)) != 0)
 	|| (smtp_sasl_passwd_map->error == 0
 	    && (value = maps_find(smtp_sasl_passwd_map,
-				  session->host, 0)) != 0)
+				  STR(iter->host), 0)) != 0)
 	|| (smtp_sasl_passwd_map->error == 0
 	    && (value = maps_find(smtp_sasl_passwd_map,
-				  session->dest, 0)) != 0)) {
+				  STR(iter->dest), 0)) != 0)) {
 	if (session->sasl_username)
 	    myfree(session->sasl_username);
 	session->sasl_username = mystrdup(value);
@@ -200,17 +206,17 @@ int     smtp_sasl_passwd_lookup(SMTP_SESSION *session)
 	session->sasl_passwd = mystrdup(passwd ? passwd : "");
 	if (msg_verbose)
 	    msg_info("%s: host `%s' user `%s' pass `%s'",
-		     myname, session->host,
+		     myname, STR(iter->host),
 		     session->sasl_username, session->sasl_passwd);
 	return (1);
     } else if (smtp_sasl_passwd_map->error) {
 	msg_warn("%s: %s lookup error",
-		  state->request->queue_id, smtp_sasl_passwd_map->title);
+		 state->request->queue_id, smtp_sasl_passwd_map->title);
 	vstream_longjmp(session->stream, SMTP_ERR_DATA);
     } else {
 	if (msg_verbose)
 	    msg_info("%s: no auth info found (sender=`%s', host=`%s')",
-		     myname, state->request->sender, session->host);
+		     myname, state->request->sender, STR(iter->host));
 	return (0);
     }
 }
@@ -227,15 +233,16 @@ void    smtp_sasl_initialize(void)
 	msg_panic("smtp_sasl_initialize: repeated call");
     if (*var_smtp_sasl_passwd == 0)
 	msg_fatal("specify a password table via the `%s' configuration parameter",
-		  VAR_SMTP_SASL_PASSWD);
+		  VAR_LMTP_SMTP(SASL_PASSWD));
 
     /*
      * Open the per-host password table and initialize the SASL library. Use
      * shared locks for reading, just in case someone updates the table.
      */
-    smtp_sasl_passwd_map = maps_create("smtp_sasl_passwd",
+    smtp_sasl_passwd_map = maps_create(VAR_LMTP_SMTP(SASL_PASSWD),
 				       var_smtp_sasl_passwd,
-				       DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX);
+				       DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
+				       | DICT_FLAG_UTF8_REQUEST);
     if ((smtp_sasl_impl = xsasl_client_init(var_smtp_sasl_type,
 					    var_smtp_sasl_path)) == 0)
 	msg_fatal("SASL library initialization");
@@ -244,7 +251,8 @@ void    smtp_sasl_initialize(void)
      * Initialize optional supported mechanism matchlist
      */
     if (*var_smtp_sasl_mechs)
-	smtp_sasl_mechs = string_list_init(MATCH_FLAG_NONE,
+	smtp_sasl_mechs = string_list_init(VAR_SMTP_SASL_MECHS,
+					   MATCH_FLAG_NONE,
 					   var_smtp_sasl_mechs);
 
     /*
@@ -257,7 +265,7 @@ void    smtp_sasl_initialize(void)
 				      var_smtp_sasl_auth_cache_time);
 #else
 	msg_warn("not compiled with TLS support -- "
-		 "ignoring the " VAR_SMTP_SASL_AUTH_CACHE_NAME " setting");
+	    "ignoring the %s setting", VAR_LMTP_SMTP(SASL_AUTH_CACHE_NAME));
 #endif
     }
 }
@@ -284,6 +292,7 @@ void    smtp_sasl_start(SMTP_SESSION *session, const char *sasl_opts_name,
 			        const char *sasl_opts_val)
 {
     XSASL_CLIENT_CREATE_ARGS create_args;
+    SMTP_ITERATOR *iter = session->iterator;
 
     if (msg_verbose)
 	msg_info("starting new SASL client");
@@ -291,7 +300,7 @@ void    smtp_sasl_start(SMTP_SESSION *session, const char *sasl_opts_name,
 	 XSASL_CLIENT_CREATE(smtp_sasl_impl, &create_args,
 			     stream = session->stream,
 			     service = var_procname,
-			     server_name = session->host,
+			     server_name = STR(iter->host),
 			     security_options = sasl_opts_val)) == 0)
 	msg_fatal("SASL per-connection initialization failed");
     session->sasl_reply = vstring_alloc(20);
@@ -302,6 +311,7 @@ void    smtp_sasl_start(SMTP_SESSION *session, const char *sasl_opts_name,
 int     smtp_sasl_authenticate(SMTP_SESSION *session, DSN_BUF *why)
 {
     const char *myname = "smtp_sasl_authenticate";
+    SMTP_ITERATOR *iter = session->iterator;
     SMTP_RESP *resp;
     const char *mechanism;
     int     result;
@@ -330,9 +340,9 @@ int     smtp_sasl_authenticate(SMTP_SESSION *session, DSN_BUF *why)
 	if (var_smtp_sasl_auth_soft_bounce && resp_dsn[0] == '5')
 	    resp_dsn[0] = '4';
 	dsb_update(why, resp_dsn, DSB_DEF_ACTION, DSB_MTYPE_DNS,
-		   session->host, var_procname, resp_str,
+		   STR(iter->host), var_procname, resp_str,
 		   "SASL [CACHED] authentication failed; server %s said: %s",
-		   session->host, resp_str);
+		   STR(iter->host), resp_str);
 	return (0);
     }
 #endif
@@ -353,22 +363,36 @@ int     smtp_sasl_authenticate(SMTP_SESSION *session, DSN_BUF *why)
 		   session->namaddr, STR(session->sasl_reply));
 	return (-1);
     }
-
-    /*
+    /*-
      * Send the AUTH command and the optional initial client response.
-     * sasl_encode64() produces four bytes for each complete or incomplete
-     * triple of input bytes. Allocate an extra byte for string termination.
+     *
+     * https://tools.ietf.org/html/rfc4954#page-4
+     * Note that the AUTH command is still subject to the line length
+     * limitations defined in [SMTP].  If use of the initial response argument
+     * would cause the AUTH command to exceed this length, the client MUST NOT
+     * use the initial response parameter...
+     *
+     * https://tools.ietf.org/html/rfc5321#section-4.5.3.1.4
+     * The maximum total length of a command line including the command word
+     * and the <CRLF> is 512 octets.
+     *
+     * Defer the initial response if the resulting command exceeds the limit.
      */
-    if (LEN(session->sasl_reply) > 0) {
+    if (LEN(session->sasl_reply) > 0
+	&& strlen(mechanism) + LEN(session->sasl_reply) + 8 <= 512) {
 	smtp_chat_cmd(session, "AUTH %s %s", mechanism,
 		      STR(session->sasl_reply));
+	VSTRING_RESET(session->sasl_reply);	/* no deferred initial reply */
     } else {
 	smtp_chat_cmd(session, "AUTH %s", mechanism);
     }
 
     /*
      * Step through the authentication protocol until the server tells us
-     * that we are done.
+     * that we are done.  If session->sasl_reply is non-empty we have a
+     * deferred initial reply and expect an empty initial challenge from the
+     * server. If the server's initial challenge is non-empty we have a SASL
+     * protocol violation with both sides wanting to go first.
      */
     while ((resp = smtp_chat_resp(session))->code / 100 == 3) {
 
@@ -387,21 +411,39 @@ int     smtp_sasl_authenticate(SMTP_SESSION *session, DSN_BUF *why)
 	 */
 	line = resp->str;
 	(void) mystrtok(&line, "- \t\n");	/* skip over result code */
-	result = xsasl_client_next(session->sasl_client, line,
-				   session->sasl_reply);
-	if (result != XSASL_AUTH_OK) {
-	    dsb_update(why, "4.7.0", DSB_DEF_ACTION,	/* Fix 200512 */
+
+	if (LEN(session->sasl_reply) > 0) {
+
+	    /*
+	     * Deferred initial response, the server challenge must be empty.
+	     * Cleared after actual transmission to the server.
+	     */
+	    if (*line) {
+		dsb_update(why, "4.7.0", DSB_DEF_ACTION,
+			   DSB_SKIP_RMTA, DSB_DTYPE_SASL, "protocol error",
+			   "SASL authentication failed; non-empty initial "
+			   "%s challenge from server %s: %s", mechanism,
+			   session->namaddr, STR(session->sasl_reply));
+		return (-1);
+	    }
+	} else {
+	    result = xsasl_client_next(session->sasl_client, line,
+				       session->sasl_reply);
+	    if (result != XSASL_AUTH_OK) {
+		dsb_update(why, "4.7.0", DSB_DEF_ACTION,	/* Fix 200512 */
 		    DSB_SKIP_RMTA, DSB_DTYPE_SASL, STR(session->sasl_reply),
-		       "SASL authentication failed; "
-		       "cannot authenticate to server %s: %s",
-		       session->namaddr, STR(session->sasl_reply));
-	    return (-1);			/* Fix 200512 */
+			   "SASL authentication failed; "
+			   "cannot authenticate to server %s: %s",
+			   session->namaddr, STR(session->sasl_reply));
+		return (-1);			/* Fix 200512 */
+	    }
 	}
 
 	/*
 	 * Send a client response.
 	 */
 	smtp_chat_cmd(session, "%s", STR(session->sasl_reply));
+	VSTRING_RESET(session->sasl_reply);	/* clear initial reply */
     }
 
     /*
@@ -416,7 +458,7 @@ int     smtp_sasl_authenticate(SMTP_SESSION *session, DSN_BUF *why)
 	if (var_smtp_sasl_auth_soft_bounce && resp->code / 100 == 5)
 	    STR(resp->dsn_buf)[0] = '4';
 	dsb_update(why, resp->dsn, DSB_DEF_ACTION,
-		   DSB_MTYPE_DNS, session->host,
+		   DSB_MTYPE_DNS, STR(iter->host),
 		   var_procname, resp->str,
 		   "SASL authentication failed; server %s said: %s",
 		   session->namaddr, resp->str);

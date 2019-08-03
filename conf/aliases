@@ -56,9 +56,15 @@ decode:		root
 #        newaliases  in  order  to  rebuild  the indexed file after
 #        changing the Postfix alias database.
 # 
-#        The input and output file formats are expected to be  com-
-#        patible  with  Sendmail  version 8, and are expected to be
-#        suitable for the use as NIS maps.
+#        When the table is provided via other means  such  as  NIS,
+#        LDAP  or  SQL,  the  same lookups are done as for ordinary
+#        indexed files.
+# 
+#        Alternatively, the  table  can  be  provided  as  a  regu-
+#        lar-expression  map  where  patterns  are given as regular
+#        expressions. In this case,  the  lookups  are  done  in  a
+#        slightly  different  way as described below under "REGULAR
+#        EXPRESSION TABLES".
 # 
 #        Users can control delivery of their own mail by setting up
 #        .forward files in their home directory.  Lines in per-user
@@ -85,13 +91,15 @@ decode:		root
 #        lowercase, in order to make database lookups case insensi-
 #        tive.
 # 
-#        In addition, when an alias exists for owner-name, delivery
-#        diagnostics  are  directed  to that address, instead of to
-#        the originator of the message.  This is typically used  to
-#        direct  delivery  errors  to  the  maintainer of a mailing
-#        list, who is in a better position  to  deal  with  mailing
-#        list delivery problems than the originator of the undeliv-
-#        ered mail.
+#        In addition, when an alias  exists  for  owner-name,  this
+#        will  override the envelope sender address, so that deliv-
+#        ery diagnostics are directed to owner-name, instead of the
+#        originator    of    the    message   (for   details,   see
+#        owner_request_special,       expand_owner_alias        and
+#        reset_owner_alias).   This  is  typically  used  to direct
+#        delivery errors to the maintainer of a mailing  list,  who
+#        is in a better position to deal with mailing list delivery
+#        problems than the originator of the undelivered mail.
 # 
 #        The value contains one or more of the following:
 # 
@@ -143,6 +151,25 @@ decode:		root
 #        The local(8) delivery agent always folds the search string
 #        to lowercase before database lookup.
 # 
+# REGULAR EXPRESSION TABLES
+#        This section describes how the table lookups  change  when
+#        the table is given in the form of regular expressions. For
+#        a description of regular expression lookup  table  syntax,
+#        see  regexp_table(5) or pcre_table(5). NOTE: these formats
+#        do not use ":" at the end of a pattern.
+# 
+#        Each regular expression is applied to  the  entire  search
+#        string.  Thus,  a  search string user+foo is not broken up
+#        into user and foo.
+# 
+#        Regular expressions are applied in the order as  specified
+#        in  the  table,  until  a regular expression is found that
+#        matches the search string.
+# 
+#        Lookup results are the same as with indexed file  lookups.
+#        For  security  reasons there is no support for $1, $2 etc.
+#        substring interpolation.
+# 
 # SECURITY
 #        The local(8) delivery agent disallows  regular  expression
 #        substitution  of $1 etc. in alias_maps, because that would
@@ -159,51 +186,51 @@ decode:		root
 #        The  text  below  provides  only  a parameter summary. See
 #        postconf(5) for more details including examples.
 # 
-#        alias_database
-#               List of alias databases that  are  updated  by  the
-#               newaliases(1) command.
+#        alias_database (see 'postconf -d' output)
+#               The alias databases for local(8) delivery that  are
+#               updated with "newaliases" or with "sendmail -bi".
 # 
-#        alias_maps
-#               List  of  alias  databases  queried by the local(8)
-#               delivery agent.
+#        alias_maps (see 'postconf -d' output)
+#               The  alias  databases  that  are  used for local(8)
+#               delivery.
 # 
-#        allow_mail_to_commands
-#               Restrict the usage of  mail  delivery  to  external
-#               command.
+#        allow_mail_to_commands (alias, forward)
+#               Restrict local(8) mail delivery  to  external  com-
+#               mands.
 # 
-#        allow_mail_to_files
-#               Restrict  the  usage  of  mail delivery to external
-#               file.
+#        allow_mail_to_files (alias, forward)
+#               Restrict  local(8) mail delivery to external files.
 # 
-#        expand_owner_alias
-#               When delivering to an alias that has an owner- com-
-#               panion  alias,  set  the envelope sender address to
-#               the right-hand side of  the  owner  alias,  instead
-#               using of the left-hand side address.
+#        expand_owner_alias (no)
+#               When delivering to an alias "aliasname" that has an
+#               "owner-aliasname" companion alias, set the envelope
+#               sender   address   to   the   expansion   of    the
+#               "owner-aliasname" alias.
 # 
-#        propagate_unmatched_extensions
-#               A  list  of  address rewriting or forwarding mecha-
-#               nisms that propagate an address extension from  the
-#               original  address  to  the  result. Specify zero or
-#               more  of  canonical,   virtual,   alias,   forward,
-#               include, or generic.
+#        propagate_unmatched_extensions (canonical, virtual)
+#               What  address  lookup tables copy an address exten-
+#               sion from the lookup key to the lookup result.
 # 
-#        owner_request_special
-#               Give  special treatment to owner-listname and list-
-#               name-request addresses.
+#        owner_request_special (yes)
+#               Enable special treatment for owner-listname entries
+#               in the aliases(5) file, and don't split owner-list-
+#               name and listname-request address  localparts  when
+#               the recipient_delimiter is set to "-".
 # 
-#        recipient_delimiter
-#               Delimiter that separates  recipients  from  address
-#               extensions.
+#        recipient_delimiter (empty)
+#               The set of characters that can separate a user name
+#               from its extension (example: user+foo), or a  .for-
+#               ward  file  name from its extension (example: .for-
+#               ward+foo).
 # 
 #        Available in Postfix version 2.3 and later:
 # 
-#        frozen_delivered_to
-#               Update  the local(8) delivery agent's Delivered-To:
-#               address (see prepend_delivered_header)  only  once,
-#               at  the  start  of  a  delivery;  do not update the
-#               Delivered-To: address while  expanding  aliases  or
-#               .forward files.
+#        frozen_delivered_to (yes)
+#               Update the local(8) delivery agent's  idea  of  the
+#               Delivered-To:     address    (see    prepend_deliv-
+#               ered_header) only once, at the start of a  delivery
+#               attempt;  do  not  update the Delivered-To: address
+#               while expanding aliases or .forward files.
 # 
 # STANDARDS
 #        RFC 822 (ARPA Internet Text Messages)
@@ -215,12 +242,12 @@ decode:		root
 #        postconf(5), configuration parameters
 # 
 # README FILES
-#        Use  "postconf  readme_directory" or "postconf html_direc-
+#        Use "postconf readme_directory" or  "postconf  html_direc-
 #        tory" to locate this information.
 #        DATABASE_README, Postfix lookup table overview
 # 
 # LICENSE
-#        The Secure Mailer license must be  distributed  with  this
+#        The  Secure  Mailer  license must be distributed with this
 #        software.
 # 
 # AUTHOR(S)
@@ -228,5 +255,10 @@ decode:		root
 #        IBM T.J. Watson Research
 #        P.O. Box 704
 #        Yorktown Heights, NY 10598, USA
+# 
+#        Wietse Venema
+#        Google, Inc.
+#        111 8th Avenue
+#        New York, NY 10011, USA
 # 
 #                                                                     ALIASES(5)

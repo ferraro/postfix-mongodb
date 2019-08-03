@@ -60,6 +60,34 @@
 #define MAIL_SERVICE_SCACHE	"scache"
 #define MAIL_SERVICE_DNSBLOG	"dnsblog"
 #define MAIL_SERVICE_TLSPROXY	"tlsproxy"
+#define MAIL_SERVICE_POSTLOG	"postlog"
+
+ /*
+  * Mail source classes. Used to specify policy decisions for content
+  * inspection and SMTPUTF8 detection.
+  */
+#define MAIL_SRC_NAME_SENDMAIL	"sendmail"	/* sendmail(1) */
+#define MAIL_SRC_NAME_SMTPD	"smtpd"	/* smtpd(8) */
+#define MAIL_SRC_NAME_QMQPD	"qmqpd"	/* qmqpd(8) */
+#define MAIL_SRC_NAME_FORWARD	"forward"	/* local(8) forward/alias */
+#define MAIL_SRC_NAME_BOUNCE	"bounce"/* bounce(8) */
+#define MAIL_SRC_NAME_NOTIFY	"notify"/* protocol etc. errors */
+#define MAIL_SRC_NAME_VERIFY	"verify"/* protocol etc. errors */
+#define MAIL_SRC_NAME_ALL	"all"	/* all sources */
+
+#define MAIL_SRC_MASK_SENDMAIL	(1<<0)	/* sendmail(1) */
+#define MAIL_SRC_MASK_SMTPD	(1<<1)	/* smtpd(8) */
+#define MAIL_SRC_MASK_QMQPD	(1<<2)	/* qmqpd(8) */
+#define MAIL_SRC_MASK_FORWARD	(1<<3)	/* local(8) forward/alias */
+#define MAIL_SRC_MASK_BOUNCE	(1<<4)	/* bounce(8) */
+#define MAIL_SRC_MASK_NOTIFY	(1<<5)	/* protocol etc. errors */
+#define MAIL_SRC_MASK_VERIFY	(1<<6)	/* protocol etc. errors */
+
+#define MAIL_SRC_MASK_ALL \
+	( MAIL_SRC_MASK_SENDMAIL | MAIL_SRC_MASK_SMTPD \
+	| MAIL_SRC_MASK_QMQPD |  MAIL_SRC_MASK_FORWARD \
+	| MAIL_SRC_MASK_BOUNCE | MAIL_SRC_MASK_NOTIFY \
+	| MAIL_SRC_MASK_VERIFY)
 
  /*
   * Well-known socket or FIFO directories. The main difference is in file
@@ -134,6 +162,7 @@ extern char *mail_pathname(const char *, const char *);
 #define MAIL_ATTR_STRESS	"stress"
 #define MAIL_ATTR_LOG_IDENT	"log_ident"
 #define MAIL_ATTR_RWR_CONTEXT	"rewrite_context"
+#define MAIL_ATTR_POL_CONTEXT	"policy_context"
 
 #define MAIL_ATTR_RWR_LOCAL	"local"
 #define MAIL_ATTR_RWR_REMOTE	"remote"
@@ -144,7 +173,7 @@ extern char *mail_pathname(const char *, const char *);
 #define MAIL_ATTR_FUNC		"function"
 #define MAIL_ATTR_CCERT_SUBJECT	"ccert_subject"
 #define MAIL_ATTR_CCERT_ISSUER	"ccert_issuer"
-#define MAIL_ATTR_CCERT_FINGERPRINT "ccert_fingerprint"
+#define MAIL_ATTR_CCERT_CERT_FPRINT "ccert_fingerprint"
 #define MAIL_ATTR_CCERT_PKEY_FPRINT "ccert_pubkey_fingerprint"
 #define MAIL_ATTR_CRYPTO_PROTOCOL "encryption_protocol"
 #define MAIL_ATTR_CRYPTO_CIPHER	"encryption_cipher"
@@ -193,6 +222,9 @@ extern char *mail_pathname(const char *, const char *);
 #define MAIL_ATTR_ACT_REVERSE_CLIENT_NAME "reverse_client_name"
 #define MAIL_ATTR_ACT_FORWARD_CLIENT_NAME "forward_client_name"
 
+#define MAIL_ATTR_ACT_SERVER_ADDR "server_address"	/* server address */
+#define MAIL_ATTR_ACT_SERVER_PORT "server_port"	/* server TCP port */
+
 #define MAIL_ATTR_PROTO_STATE	"protocol_state"	/* MAIL/RCPT/... */
 #define MAIL_ATTR_ORG_NONE	"unknown"	/* origin unknown */
 #define MAIL_ATTR_ORG_LOCAL	"local"	/* local submission */
@@ -211,6 +243,8 @@ extern char *mail_pathname(const char *, const char *);
 #define XCLIENT_PROTO		"PROTO"	/* client protocol */
 #define XCLIENT_HELO		"HELO"	/* client helo */
 #define XCLIENT_LOGIN		"LOGIN"	/* SASL login name */
+#define XCLIENT_DESTADDR	"DESTADDR"	/* server address */
+#define XCLIENT_DESTPORT	"DESTPORT"	/* server port */
 
 #define XCLIENT_UNAVAILABLE	"[UNAVAILABLE]"	/* permanently unavailable */
 #define XCLIENT_TEMPORARY	"[TEMPUNAVAIL]"	/* temporarily unavailable */
@@ -241,25 +275,7 @@ extern char *mail_pathname(const char *, const char *);
 #define MAIL_ATTR_DSN_RET	"ret_flags"	/* dsn full/headers */
 #define MAIL_ATTR_DSN_NOTIFY	"notify_flags"	/* dsn notify flags */
 #define MAIL_ATTR_DSN_ORCPT	"dsn_orig_rcpt"	/* dsn original recipient */
-
- /*
-  * TLSPROXY support.
-  */
-#define MAIL_ATTR_REMOTE_ENDPT	"remote_endpoint"	/* name[addr]:port */
-#define MAIL_ATTR_ROLE		"role"	/* requested role */
-#define MAIL_ATTR_ROLE_SERVER	"server"
-#define MAIL_ATTR_ROLE_CLIENT	"client"
-#define MAIL_ATTR_TIMEOUT	"timeout"
-#define MAIL_ATTR_PEER_CN	"peer_CN"
-#define MAIL_ATTR_ISSUER_CN	"issuer_CN"
-#define MAIL_ATTR_PEER_FPT	"peer_fingerprint"
-#define MAIL_ATTR_PEER_PKEY_FPT	"peer_pubkey_fingerprint"
-#define MAIL_ATTR_PEER_STATUS	"peer_status"
-#define MAIL_ATTR_CIPHER_PROTOCOL "cipher_protocol"
-#define MAIL_ATTR_CIPHER_NAME	"cipher_name"
-#define MAIL_ATTR_CIPHER_USEBITS "cipher_usebits"
-#define MAIL_ATTR_CIPHER_ALGBITS "cipher_algbits"
-#define MAIL_ATTR_SERVER_ID	"server_id"
+#define MAIL_ATTR_SMTPUTF8	"smtputf8"	/* RFC6531 support */
 
  /*
   * SMTP reply footer support.
@@ -275,6 +291,11 @@ extern char *mail_pathname(const char *, const char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

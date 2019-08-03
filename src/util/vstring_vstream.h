@@ -19,12 +19,34 @@
  /*
   * External interface.
   */
-extern int vstring_get(VSTRING *, VSTREAM *);
-extern int vstring_get_nonl(VSTRING *, VSTREAM *);
-extern int vstring_get_null(VSTRING *, VSTREAM *);
-extern int vstring_get_bound(VSTRING *, VSTREAM *, ssize_t);
-extern int vstring_get_nonl_bound(VSTRING *, VSTREAM *, ssize_t);
-extern int vstring_get_null_bound(VSTRING *, VSTREAM *, ssize_t);
+#define VSTRING_GET_FLAG_NONE	(0)
+#define VSTRING_GET_FLAG_APPEND	(1<<1)	/* append instead of overwrite */
+
+extern int WARN_UNUSED_RESULT vstring_get_flags(VSTRING *, VSTREAM *, int);
+extern int WARN_UNUSED_RESULT vstring_get_flags_nonl(VSTRING *, VSTREAM *, int);
+extern int WARN_UNUSED_RESULT vstring_get_flags_null(VSTRING *, VSTREAM *, int);
+extern int WARN_UNUSED_RESULT vstring_get_flags_bound(VSTRING *, VSTREAM *, int, ssize_t);
+extern int WARN_UNUSED_RESULT vstring_get_flags_nonl_bound(VSTRING *, VSTREAM *, int, ssize_t);
+extern int WARN_UNUSED_RESULT vstring_get_flags_null_bound(VSTRING *, VSTREAM *, int, ssize_t);
+
+ /*
+  * Convenience aliases for most use cases.
+  */
+#define vstring_get(string, stream) \
+	vstring_get_flags((string), (stream), VSTRING_GET_FLAG_NONE)
+#define vstring_get_nonl(string, stream) \
+	vstring_get_flags_nonl((string), (stream), VSTRING_GET_FLAG_NONE)
+#define vstring_get_null(string, stream) \
+	vstring_get_flags_null((string), (stream), VSTRING_GET_FLAG_NONE)
+
+#define vstring_get_bound(string, stream, size) \
+	vstring_get_flags_bound((string), (stream), VSTRING_GET_FLAG_NONE, size)
+#define vstring_get_nonl_bound(string, stream, size) \
+	vstring_get_flags_nonl_bound((string), (stream), \
+	    VSTRING_GET_FLAG_NONE, size)
+#define vstring_get_null_bound(string, stream, size) \
+	vstring_get_flags_null_bound((string), (stream), \
+	    VSTRING_GET_FLAG_NONE, size)
 
  /*
   * Backwards compatibility for code that still uses the vstring_fgets()
@@ -50,6 +72,11 @@ extern int vstring_get_null_bound(VSTRING *, VSTREAM *, ssize_t);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

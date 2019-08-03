@@ -13,7 +13,8 @@
 
  /* External interface. */
 
-extern const char *host_port(char *, char **, char *, char **, char *);
+extern const char *WARN_UNUSED_RESULT host_port(char *, char **, char *,
+						        char **, char *);
 
 /* LICENSE
 /* .ad
@@ -24,6 +25,11 @@ extern const char *host_port(char *, char **, char *, char **, char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

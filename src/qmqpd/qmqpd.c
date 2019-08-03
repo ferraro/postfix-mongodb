@@ -21,7 +21,8 @@
 /*	clients and to DNS servers on the network. The QMQP server can be
 /*	run chrooted at fixed low privilege.
 /* DIAGNOSTICS
-/*	Problems and transactions are logged to \fBsyslogd\fR(8).
+/*	Problems and transactions are logged to \fBsyslogd\fR(8)
+/*	or \fBpostlogd\fR(8).
 /* BUGS
 /*	The QMQP protocol provides only one server reply per message
 /*	delivery. It is therefore not possible to reject individual
@@ -50,6 +51,22 @@
 /* .IP "\fBreceive_override_options (empty)\fR"
 /*	Enable or disable recipient validation, built-in content
 /*	filtering, or address mapping.
+/* SMTPUTF8 CONTROLS
+/* .ad
+/* .fi
+/*	Preliminary SMTPUTF8 support is introduced with Postfix 3.0.
+/* .IP "\fBsmtputf8_enable (yes)\fR"
+/*	Enable preliminary SMTPUTF8 support for the protocols described
+/*	in RFC 6531..6533.
+/* .IP "\fBsmtputf8_autodetect_classes (sendmail, verify)\fR"
+/*	Detect that a message requires SMTPUTF8 support for the specified
+/*	mail origin classes.
+/* .PP
+/*	Available in Postfix version 3.2 and later:
+/* .IP "\fBenable_idna2003_compatibility (no)\fR"
+/*	Enable 'transitional' compatibility between IDNA2003 and IDNA2008,
+/*	when converting UTF-8 domain names to/from the ASCII form that is
+/*	used for DNS lookups.
 /* RESOURCE AND RATE CONTROLS
 /* .ad
 /* .fi
@@ -112,8 +129,8 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* .IP "\fBverp_delimiter_filter (-=+)\fR"
 /*	The characters Postfix accepts as VERP delimiter characters on the
 /*	Postfix \fBsendmail\fR(1) command line and in SMTP commands.
@@ -122,10 +139,15 @@
 /* .IP "\fBqmqpd_client_port_logging (no)\fR"
 /*	Enable logging of the remote QMQP client port in addition to
 /*	the hostname and IP address.
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* SEE ALSO
 /*	http://cr.yp.to/proto/qmqp.html, QMQP protocol
 /*	cleanup(8), message canonicalization
 /*	master(8), process manager
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README FILES
 /* .ad
@@ -148,6 +170,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -187,6 +214,7 @@
 #include <lex_822.h>
 #include <verp_sender.h>
 #include <input_transp.h>
+#include <smtputf8.h>
 
 /* Single-threaded server skeleton. */
 
@@ -241,10 +269,11 @@ static void qmqpd_open_file(QMQPD_STATE *state)
      */
     cleanup_flags = input_transp_cleanup(CLEANUP_FLAG_MASK_EXTERNAL,
 					 qmqpd_input_transp_mask);
+    cleanup_flags |= smtputf8_autodetect(MAIL_SRC_MASK_QMQPD);
     state->dest = mail_stream_service(MAIL_CLASS_PUBLIC, var_cleanup_service);
     if (state->dest == 0
 	|| attr_print(state->dest->stream, ATTR_FLAG_NONE,
-		      ATTR_TYPE_INT, MAIL_ATTR_FLAGS, cleanup_flags,
+		      SEND_ATTR_INT(MAIL_ATTR_FLAGS, cleanup_flags),
 		      ATTR_TYPE_END) != 0)
 	msg_fatal("unable to connect to the %s %s service",
 		  MAIL_CLASS_PUBLIC, var_cleanup_service);
@@ -473,7 +502,7 @@ static void qmqpd_write_content(QMQPD_STATE *state)
 	if (first) {
 	    if (strncmp(start + strspn(start, ">"), "From ", 5) == 0) {
 		rec_fprintf(state->cleanup, rec_type,
-			    "X-Mailbox-Line: %*s", len, start);
+			    "X-Mailbox-Line: %.*s", len, start);
 		continue;
 	    }
 	    first = 0;
@@ -706,7 +735,8 @@ static void qmqpd_proto(QMQPD_STATE *state)
      */
     if (state->reason && state->where)
 	msg_info("%s: %s: %s while %s",
-	      state->queue_id, state->namaddr, state->reason, state->where);
+		 state->queue_id ? state->queue_id : "NOQUEUE",
+		 state->namaddr, state->reason, state->where);
 }
 
 /* qmqpd_service - service one client */
@@ -775,7 +805,7 @@ static void pre_jail_init(char *unused_name, char **unused_argv)
 {
     debug_peer_init();
     qmqpd_clients =
-	namadr_list_init(MATCH_FLAG_RETURN
+	namadr_list_init(VAR_QMQPD_CLIENTS, MATCH_FLAG_RETURN
 			 | match_parent_style(VAR_QMQPD_CLIENTS),
 			 var_qmqpd_clients);
 }
@@ -824,11 +854,11 @@ int     main(int argc, char **argv)
      * Pass control to the single-threaded service skeleton.
      */
     single_server_main(argc, argv, qmqpd_service,
-		       MAIL_SERVER_TIME_TABLE, time_table,
-		       MAIL_SERVER_STR_TABLE, str_table,
-		       MAIL_SERVER_BOOL_TABLE, bool_table,
-		       MAIL_SERVER_PRE_INIT, pre_jail_init,
-		       MAIL_SERVER_PRE_ACCEPT, pre_accept,
-		       MAIL_SERVER_POST_INIT, post_jail_init,
+		       CA_MAIL_SERVER_TIME_TABLE(time_table),
+		       CA_MAIL_SERVER_STR_TABLE(str_table),
+		       CA_MAIL_SERVER_BOOL_TABLE(bool_table),
+		       CA_MAIL_SERVER_PRE_INIT(pre_jail_init),
+		       CA_MAIL_SERVER_PRE_ACCEPT(pre_accept),
+		       CA_MAIL_SERVER_POST_INIT(post_jail_init),
 		       0);
 }

@@ -17,6 +17,9 @@
 /*	const char *value;
 /*	int	clobber;
 /*
+/*	int	unsetenv(name)
+/*	const char *name;
+/*
 /*	int	seteuid(euid)
 /*	uid_t	euid;
 /*
@@ -40,7 +43,7 @@
 /*	int	af;
 /*	const void *src;
 /*	char	*dst;
-/*	size_t	size;
+/*	SOCKADDR_SIZE size;
 /*
 /*	int	inet_pton(af, src, dst)
 /*	int	af;
@@ -58,6 +61,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -114,6 +122,27 @@ int     setenv(const char *name, const char *value, int clobber)
 	return (1);
     sprintf(cp, "%s=%s", name, value);
     return (putenv(cp));
+}
+
+/* unsetenv - remove all instances of the name */
+
+int     unsetenv(const char *name)
+{
+    extern char **environ;
+    ssize_t name_len = strlen(name);
+    char  **src_pp;
+    char  **dst_pp;
+
+    for (dst_pp = src_pp = environ; *src_pp; src_pp++, dst_pp++) {
+	if (strncmp(*src_pp, name, name_len) == 0
+	    && *(*src_pp + name_len) == '=') {
+	    dst_pp--;
+	} else if (dst_pp != src_pp) {
+	    *dst_pp = *src_pp;
+	}
+    }
+    *dst_pp = 0;
+    return (0);
 }
 
 #endif
@@ -293,7 +322,7 @@ int     closefrom(int lowfd)
 
 /* inet_ntop - convert binary address to printable address */
 
-const char *inet_ntop(int af, const void *src, char *dst, size_t size)
+const char *inet_ntop(int af, const void *src, char *dst, SOCKADDR_SIZE size)
 {
     const unsigned char *addr;
     char    buffer[sizeof("255.255.255.255")];
@@ -352,7 +381,7 @@ int     inet_pton(int af, const char *src, void *dst)
 	       && strcmp(src, "255.255.255.255") != 0) {
 	return (0);
     } else {
-	memcpy(dst, (char *) &addr, sizeof(addr));
+	memcpy(dst, (void *) &addr, sizeof(addr));
 	return (1);
     }
 }

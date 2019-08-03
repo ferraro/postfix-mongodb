@@ -22,9 +22,7 @@
 extern int unix_connect(const char *, int, int);
 extern int inet_connect(const char *, int, int);
 extern int stream_connect(const char *, int, int);
-extern int stream_pass_connect(const char *, int, int);
-
-#define unix_pass_connect unix_connect
+extern int unix_dgram_connect(const char *, int);
 
 /* LICENSE
 /* .ad
@@ -35,6 +33,11 @@ extern int stream_pass_connect(const char *, int, int);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

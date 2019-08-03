@@ -49,7 +49,8 @@
 /*	to the Postfix-owned \fBdata_directory\fR, and a warning
 /*	is logged.
 /* DIAGNOSTICS
-/*	Problems and transactions are logged to the syslog daemon.
+/*	Problems and transactions are logged to \fBsyslogd\fR(8)
+/*	or \fBpostlogd\fR(8).
 /* BUGS
 /*	There is no automatic means to limit the number of entries in the
 /*	TLS session caches and/or the size of the TLS cache files.
@@ -130,14 +131,19 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* SEE ALSO
 /*	smtp(8), Postfix SMTP client
 /*	smtpd(8), Postfix SMTP server
 /*	postconf(5), configuration parameters
 /*	master(5), generic daemon options
 /*	master(8), process manager
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README FILES
 /* .ad
@@ -151,6 +157,8 @@
 /* .ad
 /* .fi
 /*	The Secure Mailer license must be distributed with this software.
+/* HISTORY
+/*	This service was introduced with Postfix version 2.2.
 /* AUTHOR(S)
 /*	Lutz Jaenicke
 /*	BTU Cottbus
@@ -163,6 +171,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -207,7 +220,6 @@
 #include <mail_conf.h>
 #include <mail_params.h>
 #include <mail_version.h>
-#include <tls_mgr.h>
 #include <mail_proto.h>
 #include <data_redirect.h>
 
@@ -219,6 +231,7 @@
 /* TLS library. */
 
 #ifdef USE_TLS
+#include <tls_mgr.h>
 #define TLS_INTERNAL
 #include <tls.h>			/* TLS_MGR_SCACHE_<type> */
 #include <tls_prng.h>
@@ -289,7 +302,7 @@ typedef struct {
     int    *cache_timeout;		/* main.cf parameter value */
 } TLSMGR_SCACHE;
 
-TLSMGR_SCACHE cache_table[] = {
+static TLSMGR_SCACHE cache_table[] = {
     TLS_MGR_SCACHE_SMTPD, 0, 0, &var_smtpd_tls_scache_db,
     VAR_SMTPD_TLS_LOGLEVEL,
     &var_smtpd_tls_loglevel, &var_smtpd_tls_scache_timeout,
@@ -302,6 +315,8 @@ TLSMGR_SCACHE cache_table[] = {
     0,
 };
 
+#define	smtpd_cache	(cache_table[0])
+
  /*
   * SLMs.
   */
@@ -311,7 +326,7 @@ TLSMGR_SCACHE cache_table[] = {
 
 /* tlsmgr_prng_exch_event - update PRNG exchange file */
 
-static void tlsmgr_prng_exch_event(int unused_event, char *dummy)
+static void tlsmgr_prng_exch_event(int unused_event, void *dummy)
 {
     const char *myname = "tlsmgr_prng_exch_event";
     unsigned char randbyte;
@@ -345,7 +360,7 @@ static void tlsmgr_prng_exch_event(int unused_event, char *dummy)
 
 /* tlsmgr_reseed_event - re-seed the internal PRNG pool */
 
-static void tlsmgr_reseed_event(int unused_event, char *dummy)
+static void tlsmgr_reseed_event(int unused_event, void *dummy)
 {
     int     next_period;
     unsigned char randbyte;
@@ -430,7 +445,7 @@ static void tlsmgr_reseed_event(int unused_event, char *dummy)
 
 /* tlsmgr_cache_run_event - start TLS session cache scan */
 
-static void tlsmgr_cache_run_event(int unused_event, char *ctx)
+static void tlsmgr_cache_run_event(int unused_event, void *ctx)
 {
     const char *myname = "tlsmgr_cache_run_event";
     TLSMGR_SCACHE *cache = (TLSMGR_SCACHE *) ctx;
@@ -451,8 +466,46 @@ static void tlsmgr_cache_run_event(int unused_event, char *ctx)
 	    tls_scache_sequence(cache->cache_info, DICT_SEQ_FUN_FIRST,
 				TLS_SCACHE_SEQUENCE_NOTHING);
 
-    event_request_timer(tlsmgr_cache_run_event, (char *) cache,
+    event_request_timer(tlsmgr_cache_run_event, (void *) cache,
 			cache->cache_info->timeout);
+}
+
+/* tlsmgr_key - return matching or current RFC 5077 session ticket keys */
+
+static int tlsmgr_key(VSTRING *buffer, int timeout)
+{
+    TLS_TICKET_KEY *key;
+    TLS_TICKET_KEY tmp;
+    unsigned char *name;
+    time_t  now = time((time_t *) 0);
+
+    /* In tlsmgr requests we encode null key names as empty strings. */
+    name = LEN(buffer) ? (unsigned char *) STR(buffer) : 0;
+
+    /*
+     * Each key's encrypt and subsequent decrypt-only timeout is half of the
+     * total session timeout.
+     */
+    timeout /= 2;
+
+    /* Attempt to locate existing key */
+    if ((key = tls_scache_key(name, now, timeout)) == 0) {
+	if (name == 0) {
+	    /* Create new encryption key */
+	    if (RAND_bytes(tmp.name, TLS_TICKET_NAMELEN) <= 0
+		|| RAND_bytes(tmp.bits, TLS_TICKET_KEYLEN) <= 0
+		|| RAND_bytes(tmp.hmac, TLS_TICKET_MACLEN) <= 0)
+		return (TLS_MGR_STAT_ERR);
+	    tmp.tout = now + timeout - 1;
+	    key = tls_scache_key_rotate(&tmp);
+	} else {
+	    /* No matching decryption key found */
+	    return (TLS_MGR_STAT_ERR);
+	}
+    }
+    /* Return value overrites name buffer */
+    vstring_memcpy(buffer, (char *) key, sizeof(*key));
+    return (TLS_MGR_STAT_OK);
 }
 
 /* tlsmgr_loop - TLS manager main loop */
@@ -532,7 +585,7 @@ static int tlsmgr_request_receive(VSTREAM *client_stream, VSTRING *request)
     else {
 	if (attr_scan(client_stream,
 		      ATTR_FLAG_MORE | ATTR_FLAG_STRICT,
-		      ATTR_TYPE_STR, TLS_MGR_ATTR_REQ, request,
+		      RECV_ATTR_STR(TLS_MGR_ATTR_REQ, request),
 		      ATTR_TYPE_END) != 1) {
 	    return (-1);
 	}
@@ -586,8 +639,8 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 	 */
 	if (STREQ(STR(request), TLS_MGR_REQ_LOOKUP)) {
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_TYPE, cache_type,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_ID, cache_id,
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_TYPE, cache_type),
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_ID, cache_id),
 			  ATTR_TYPE_END) == 2) {
 		for (ent = cache_table; ent->cache_label; ++ent)
 		    if (strcmp(ent->cache_label, STR(cache_type)) == 0)
@@ -609,9 +662,9 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 		}
 	    }
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
-		       ATTR_TYPE_DATA, TLS_MGR_ATTR_SESSION,
-		       LEN(buffer), STR(buffer),
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+		       SEND_ATTR_DATA(TLS_MGR_ATTR_SESSION,
+				      LEN(buffer), STR(buffer)),
 		       ATTR_TYPE_END);
 	}
 
@@ -620,9 +673,9 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 	 */
 	else if (STREQ(STR(request), TLS_MGR_REQ_UPDATE)) {
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_TYPE, cache_type,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_ID, cache_id,
-			  ATTR_TYPE_DATA, TLS_MGR_ATTR_SESSION, buffer,
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_TYPE, cache_type),
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_ID, cache_id),
+			  RECV_ATTR_DATA(TLS_MGR_ATTR_SESSION, buffer),
 			  ATTR_TYPE_END) == 3) {
 		for (ent = cache_table; ent->cache_label; ++ent)
 		    if (strcmp(ent->cache_label, STR(cache_type)) == 0)
@@ -638,7 +691,7 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 		}
 	    }
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
 		       ATTR_TYPE_END);
 	}
 
@@ -647,8 +700,8 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 	 */
 	else if (STREQ(STR(request), TLS_MGR_REQ_DELETE)) {
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_TYPE, cache_type,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_ID, cache_id,
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_TYPE, cache_type),
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_ID, cache_id),
 			  ATTR_TYPE_END) == 2) {
 		for (ent = cache_table; ent->cache_label; ++ent)
 		    if (strcmp(ent->cache_label, STR(cache_type)) == 0)
@@ -663,7 +716,32 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 		}
 	    }
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+		       ATTR_TYPE_END);
+	}
+
+	/*
+	 * RFC 5077 TLS session ticket keys
+	 */
+	else if (STREQ(STR(request), TLS_MGR_REQ_TKTKEY)) {
+	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
+			  RECV_ATTR_DATA(TLS_MGR_ATTR_KEYNAME, buffer),
+			  ATTR_TYPE_END) == 1) {
+		if (LEN(buffer) != 0 && LEN(buffer) != TLS_TICKET_NAMELEN) {
+		    msg_warn("invalid session ticket key name length: %ld",
+			     (long) LEN(buffer));
+		    VSTRING_RESET(buffer);
+		} else if (*smtpd_cache.cache_timeout <= 0) {
+		    status = TLS_MGR_STAT_ERR;
+		    VSTRING_RESET(buffer);
+		} else {
+		    status = tlsmgr_key(buffer, *smtpd_cache.cache_timeout);
+		}
+	    }
+	    attr_print(client_stream, ATTR_FLAG_NONE,
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+		       SEND_ATTR_DATA(TLS_MGR_ATTR_KEYBUF,
+				      LEN(buffer), STR(buffer)),
 		       ATTR_TYPE_END);
 	}
 
@@ -672,7 +750,7 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 	 */
 	else if (STREQ(STR(request), TLS_MGR_REQ_SEED)) {
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
-			  ATTR_TYPE_INT, TLS_MGR_ATTR_SIZE, &len,
+			  RECV_ATTR_INT(TLS_MGR_ATTR_SIZE, &len),
 			  ATTR_TYPE_END) == 1) {
 		VSTRING_RESET(buffer);
 		if (len <= 0 || len > 255) {
@@ -681,15 +759,14 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 		} else {
 		    VSTRING_SPACE(buffer, len);
 		    RAND_bytes((unsigned char *) STR(buffer), len);
-		    VSTRING_AT_OFFSET(buffer, len);	/* XXX not part of the
-							 * official interface */
+		    vstring_set_payload_size(buffer, len);
 		    status = TLS_MGR_STAT_OK;
 		}
 	    }
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
-		       ATTR_TYPE_DATA, TLS_MGR_ATTR_SEED,
-		       LEN(buffer), STR(buffer),
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+		       SEND_ATTR_DATA(TLS_MGR_ATTR_SEED,
+				      LEN(buffer), STR(buffer)),
 		       ATTR_TYPE_END);
 	}
 
@@ -698,9 +775,10 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 	 */
 	else if (STREQ(STR(request), TLS_MGR_REQ_POLICY)) {
 	    int     cachable = 0;
+	    int     timeout = 0;
 
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
-			  ATTR_TYPE_STR, TLS_MGR_ATTR_CACHE_TYPE, cache_type,
+			  RECV_ATTR_STR(TLS_MGR_ATTR_CACHE_TYPE, cache_type),
 			  ATTR_TYPE_END) == 1) {
 		for (ent = cache_table; ent->cache_label; ++ent)
 		    if (strcmp(ent->cache_label, STR(cache_type)) == 0)
@@ -710,12 +788,14 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
 			     STR(cache_type), TLS_MGR_REQ_POLICY);
 		} else {
 		    cachable = (ent->cache_info != 0) ? 1 : 0;
+		    timeout = *ent->cache_timeout;
 		    status = TLS_MGR_STAT_OK;
 		}
 	    }
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
-		       ATTR_TYPE_INT, TLS_MGR_ATTR_CACHABLE, cachable,
+		       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+		       SEND_ATTR_INT(TLS_MGR_ATTR_CACHABLE, cachable),
+		       SEND_ATTR_INT(TLS_MGR_ATTR_SESSTOUT, timeout),
 		       ATTR_TYPE_END);
 	}
 
@@ -743,7 +823,7 @@ static void tlsmgr_service(VSTREAM *client_stream, char *unused_service,
      */
     else {
 	attr_print(client_stream, ATTR_FLAG_NONE,
-		   ATTR_TYPE_INT, MAIL_ATTR_STATUS, TLS_MGR_STAT_FAIL,
+		   SEND_ATTR_INT(MAIL_ATTR_STATUS, TLS_MGR_STAT_FAIL),
 		   ATTR_TYPE_END);
     }
     vstream_fflush(client_stream);
@@ -847,7 +927,15 @@ static void tlsmgr_pre_init(char *unused_name, char **unused_argv)
      */
     dup_filter = htable_create(sizeof(cache_table) / sizeof(cache_table[0]));
     for (ent = cache_table; ent->cache_label; ++ent) {
-	if (**ent->cache_db) {
+	/* Sanitize session timeout */
+	if (*ent->cache_timeout > 0) {
+	    if (*ent->cache_timeout < TLS_SESSION_LIFEMIN)
+		*ent->cache_timeout = TLS_SESSION_LIFEMIN;
+	} else {
+	    *ent->cache_timeout = 0;
+	}
+	/* External cache database disabled if timeout is non-positive */
+	if (*ent->cache_timeout > 0 && **ent->cache_db) {
 	    if ((dup_label = htable_find(dup_filter, *ent->cache_db)) != 0)
 		msg_fatal("do not use the same TLS cache file %s for %s and %s",
 			  *ent->cache_db, dup_label, ent->cache_label);
@@ -860,7 +948,7 @@ static void tlsmgr_pre_init(char *unused_name, char **unused_argv)
 				*ent->cache_timeout);
 	}
     }
-    htable_free(dup_filter, (void (*) (char *)) 0);
+    htable_free(dup_filter, (void (*) (void *)) 0);
 
     /*
      * Clean up and restore privilege.
@@ -913,7 +1001,7 @@ static void tlsmgr_post_init(char *unused_name, char **unused_argv)
      */
     for (ent = cache_table; ent->cache_label; ++ent)
 	if (ent->cache_info)
-	    tlsmgr_cache_run_event(NULL_EVENT, (char *) ent);
+	    tlsmgr_cache_run_event(NULL_EVENT, (void *) ent);
 }
 
 /* tlsmgr_before_exit - save PRNG state before exit */
@@ -948,9 +1036,9 @@ int     main(int argc, char **argv)
     static const CONFIG_TIME_TABLE time_table[] = {
 	VAR_TLS_RESEED_PERIOD, DEF_TLS_RESEED_PERIOD, &var_tls_reseed_period, 1, 0,
 	VAR_TLS_PRNG_UPD_PERIOD, DEF_TLS_PRNG_UPD_PERIOD, &var_tls_prng_exch_period, 1, 0,
-	VAR_SMTPD_TLS_SCACHTIME, DEF_SMTPD_TLS_SCACHTIME, &var_smtpd_tls_scache_timeout, 0, 0,
-	VAR_SMTP_TLS_SCACHTIME, DEF_SMTP_TLS_SCACHTIME, &var_smtp_tls_scache_timeout, 0, 0,
-	VAR_LMTP_TLS_SCACHTIME, DEF_LMTP_TLS_SCACHTIME, &var_lmtp_tls_scache_timeout, 0, 0,
+	VAR_SMTPD_TLS_SCACHTIME, DEF_SMTPD_TLS_SCACHTIME, &var_smtpd_tls_scache_timeout, 0, MAX_SMTPD_TLS_SCACHETIME,
+	VAR_SMTP_TLS_SCACHTIME, DEF_SMTP_TLS_SCACHTIME, &var_smtp_tls_scache_timeout, 0, MAX_SMTP_TLS_SCACHETIME,
+	VAR_LMTP_TLS_SCACHTIME, DEF_LMTP_TLS_SCACHTIME, &var_lmtp_tls_scache_timeout, 0, MAX_LMTP_TLS_SCACHETIME,
 	0,
     };
     static const CONFIG_INT_TABLE int_table[] = {
@@ -968,14 +1056,14 @@ int     main(int argc, char **argv)
      * monitoring our service port while this process runs.
      */
     multi_server_main(argc, argv, tlsmgr_service,
-		      MAIL_SERVER_TIME_TABLE, time_table,
-		      MAIL_SERVER_INT_TABLE, int_table,
-		      MAIL_SERVER_STR_TABLE, str_table,
-		      MAIL_SERVER_PRE_INIT, tlsmgr_pre_init,
-		      MAIL_SERVER_POST_INIT, tlsmgr_post_init,
-		      MAIL_SERVER_EXIT, tlsmgr_before_exit,
-		      MAIL_SERVER_LOOP, tlsmgr_loop,
-		      MAIL_SERVER_SOLITARY,
+		      CA_MAIL_SERVER_TIME_TABLE(time_table),
+		      CA_MAIL_SERVER_INT_TABLE(int_table),
+		      CA_MAIL_SERVER_STR_TABLE(str_table),
+		      CA_MAIL_SERVER_PRE_INIT(tlsmgr_pre_init),
+		      CA_MAIL_SERVER_POST_INIT(tlsmgr_post_init),
+		      CA_MAIL_SERVER_EXIT(tlsmgr_before_exit),
+		      CA_MAIL_SERVER_LOOP(tlsmgr_loop),
+		      CA_MAIL_SERVER_SOLITARY,
 		      0);
 }
 

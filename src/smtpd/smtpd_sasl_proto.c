@@ -7,7 +7,7 @@
 /*	#include "smtpd.h"
 /*	#include "smtpd_sasl_proto.h"
 /*
-/*	void	smtpd_sasl_auth_cmd(state, argc, argv)
+/*	int	smtpd_sasl_auth_cmd(state, argc, argv)
 /*	SMTPD_STATE *state;
 /*	int	argc;
 /*	SMTPD_TOKEN *argv;
@@ -23,9 +23,6 @@
 /*	char	*smtpd_sasl_mail_opt(state, sender)
 /*	SMTPD_STATE *state;
 /*	const char *sender;
-/*
-/*	void	smtpd_sasl_mail_log(state)
-/*	SMTPD_STATE *state;
 /*
 /*	void	smtpd_sasl_mail_reset(state)
 /*	SMTPD_STATE *state;
@@ -64,9 +61,6 @@
 /*	option to the MAIL FROM command. The result is an error response
 /*	in case of problems.
 /*
-/*	smtpd_sasl_mail_log() logs SASL-specific information after
-/*	processing the MAIL FROM command.
-/*
 /*	smtpd_sasl_mail_reset() performs cleanup for the SASL-specific
 /*	AUTH=sender option to the MAIL FROM command.
 /*
@@ -104,6 +98,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*
 /*	TLS support originally by:
 /*	Lutz Jaenicke
@@ -164,13 +163,12 @@ int     smtpd_sasl_auth_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
 	smtpd_chat_reply(state, "503 5.5.1 Error: authentication not enabled");
 	return (-1);
     }
-#define IN_MAIL_TRANSACTION(state) ((state)->sender != 0)
-    if (IN_MAIL_TRANSACTION(state)) {
+    if (SMTPD_IN_MAIL_TRANSACTION(state)) {
 	state->error_mask |= MAIL_ERROR_PROTOCOL;
 	smtpd_chat_reply(state, "503 5.5.1 Error: MAIL transaction in progress");
 	return (-1);
     }
-    if (smtpd_milters != 0 && (err = milter_other_event(smtpd_milters)) != 0) {
+    if (state->milters != 0 && (err = milter_other_event(state->milters)) != 0) {
 	if (err[0] == '5') {
 	    state->error_mask |= MAIL_ERROR_POLICY;
 	    smtpd_chat_reply(state, "%s", err);
@@ -252,34 +250,6 @@ char   *smtpd_sasl_mail_opt(SMTPD_STATE *state, const char *addr)
 	printable(state->sasl_sender, '?');
     }
     return (0);
-}
-
-/* smtpd_sasl_mail_log - SASL-specific MAIL FROM logging */
-
-void    smtpd_sasl_mail_log(SMTPD_STATE *state)
-{
-
-    /*
-     * See also: smtpd.c, for a shorter client= logfile record.
-     */
-#define PRINT_OR_NULL(cond, str) \
-	    ((cond) ? (str) : "")
-#define PRINT2_OR_NULL(cond, name, value) \
-	    PRINT_OR_NULL((cond), (name)), PRINT_OR_NULL((cond), (value))
-
-    msg_info("%s: client=%s%s%s%s%s%s%s%s%s%s%s",
-	     (state->queue_id ? state->queue_id : "NOQUEUE"),
-	     state->namaddr,
-	     PRINT2_OR_NULL(state->sasl_method,
-			    ", sasl_method=", state->sasl_method),
-	     PRINT2_OR_NULL(state->sasl_username,
-			    ", sasl_username=", state->sasl_username),
-	     PRINT2_OR_NULL(state->sasl_sender,
-			    ", sasl_sender=", state->sasl_sender),
-	     PRINT2_OR_NULL(HAVE_FORWARDED_IDENT(state),
-			    ", orig_queue_id=", FORWARD_IDENT(state)),
-	     PRINT2_OR_NULL(HAVE_FORWARDED_CLIENT_ATTR(state),
-			    ", orig_client=", FORWARD_NAMADDR(state)));
 }
 
 /* smtpd_sasl_mail_reset - SASL-specific MAIL FROM cleanup */

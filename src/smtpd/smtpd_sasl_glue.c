@@ -115,6 +115,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -202,7 +207,6 @@ void    smtpd_sasl_activate(SMTPD_STATE *state, const char *sasl_opts_name,
     /*
      * Set up a new server context for this connection.
      */
-#define SMTPD_SASL_SERVICE "smtp"
 #ifdef USE_TLS
     tls_flag = state->tls_context != 0;
 #else
@@ -214,10 +218,16 @@ void    smtpd_sasl_activate(SMTPD_STATE *state, const char *sasl_opts_name,
     if ((state->sasl_server =
 	 XSASL_SERVER_CREATE(smtpd_sasl_impl, &create_args,
 			     stream = state->client,
-			     server_addr = "",	/* need smtpd_peer.c update */
+			     addr_family = state->addr_family,
+			     server_addr = ADDR_OR_EMPTY(state->dest_addr,
+						       SERVER_ADDR_UNKNOWN),
+			     server_port = ADDR_OR_EMPTY(state->dest_port,
+						       SERVER_PORT_UNKNOWN),
 			     client_addr = ADDR_OR_EMPTY(state->addr,
 						       CLIENT_ADDR_UNKNOWN),
-			     service = SMTPD_SASL_SERVICE,
+			     client_port = ADDR_OR_EMPTY(state->port,
+						       CLIENT_PORT_UNKNOWN),
+			     service = var_smtpd_sasl_service,
 			   user_realm = REALM_OR_NULL(var_smtpd_sasl_realm),
 			     security_options = sasl_opts_val,
 			     tls_flag = tls_flag)) == 0)
@@ -298,12 +308,11 @@ int     smtpd_sasl_authenticate(SMTPD_STATE *state,
 
 	/*
 	 * Receive the client response. "*" means that the client gives up.
-	 * XXX For now we ignore the fact that an excessively long response
-	 * will be chopped into multiple reponses. To handle such responses,
-	 * we need to change smtpd_chat_query() so that it returns an error
-	 * indication.
 	 */
-	smtpd_chat_query(state);
+	if (!smtpd_chat_query_limit(state, var_smtpd_sasl_resp_limit)) {
+	    smtpd_chat_reply(state, "500 5.5.6 SASL response limit exceeded");
+	    return (-1);
+	}
 	if (strcmp(STR(state->buffer), "*") == 0) {
 	    msg_warn("%s: SASL %s authentication aborted",
 		     state->namaddr, sasl_method);
@@ -316,8 +325,12 @@ int     smtpd_sasl_authenticate(SMTPD_STATE *state,
 		 state->namaddr, sasl_method,
 		 STR(state->sasl_reply));
 	/* RFC 4954 Section 6. */
-	smtpd_chat_reply(state, "535 5.7.8 Error: authentication failed: %s",
-			 STR(state->sasl_reply));
+	if (status == XSASL_AUTH_TEMP)
+	    smtpd_chat_reply(state, "454 4.7.0 Temporary authentication failure: %s",
+			     STR(state->sasl_reply));
+	else
+	    smtpd_chat_reply(state, "535 5.7.8 Error: authentication failed: %s",
+			     STR(state->sasl_reply));
 	return (-1);
     }
     /* RFC 4954 Section 6. */

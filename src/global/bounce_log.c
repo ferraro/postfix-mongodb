@@ -264,7 +264,7 @@ BOUNCE_LOG *bounce_log_read(BOUNCE_LOG *bp, RCPT_BUF *rcpt_buf,
 	recipient = cp + 1;
 	if ((cp = strstr(recipient, ">: ")) == 0) {
 	    msg_warn("%s: malformed record: %.30s...",
-		     VSTREAM_PATH(bp->fp), cp);
+		     VSTREAM_PATH(bp->fp), recipient - 1);
 	    continue;
 	}
 	*cp = 0;
@@ -310,7 +310,7 @@ int     bounce_log_close(BOUNCE_LOG *bp)
     vstring_free(bp->buf);
     myfree(bp->compat_status);
     myfree(bp->compat_action);
-    myfree((char *) bp);
+    myfree((void *) bp);
 
     return (ret);
 }

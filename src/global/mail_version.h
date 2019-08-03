@@ -16,23 +16,23 @@
   * snapshots are called a.b-yyyymmdd, where a=major release number, b=minor
   * release number, c=patchlevel, and yyyymmdd is the release date:
   * yyyy=year, mm=month, dd=day.
-  *
+  * 
   * Patches change both the patchlevel and the release date. Snapshots have no
   * patchlevel; they change the release date only.
   */
-#define MAIL_RELEASE_DATE	"20120801"
-#define MAIL_VERSION_NUMBER	"2.9.4"
+#define MAIL_RELEASE_DATE	"20190629"
+#define MAIL_VERSION_NUMBER	"3.4.6"
 
 #ifdef SNAPSHOT
-# define MAIL_VERSION_DATE	"-" MAIL_RELEASE_DATE
+#define MAIL_VERSION_DATE	"-" MAIL_RELEASE_DATE
 #else
-# define MAIL_VERSION_DATE	""
+#define MAIL_VERSION_DATE	""
 #endif
 
 #ifdef NONPROD
-# define MAIL_VERSION_PROD	"-nonprod"
+#define MAIL_VERSION_PROD	"-nonprod"
 #else
-# define MAIL_VERSION_PROD	""
+#define MAIL_VERSION_PROD	""
 #endif
 
 #define VAR_MAIL_VERSION	"mail_version"
@@ -99,6 +99,11 @@ extern void check_mail_version(const char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

@@ -39,6 +39,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #include <sys_defs.h>
@@ -49,6 +54,7 @@
 #include <vstream.h>
 #include <vstring.h>
 #include <vstring_vstream.h>
+#include <compat_va_copy.h>
 
 /* Application-specific. */
 
@@ -142,16 +148,13 @@ int     memcache_fread(VSTREAM *stream, VSTRING *buf, ssize_t todo)
     /*
      * Do the I/O.
      */
-    VSTRING_SPACE(buf, todo);
-    VSTRING_AT_OFFSET(buf, todo);
-    if (vstream_fread(stream, STR(buf), todo) != todo
+    if (vstream_fread_buf(stream, buf, todo) != todo
 	|| VSTREAM_GETC(stream) != '\r'
 	|| VSTREAM_GETC(stream) != '\n') {
 	if (msg_verbose)
 	    msg_info("%s read: error", VSTREAM_PATH(stream));
 	return (-1);
     } else {
-	vstring_truncate(buf, todo);
 	VSTRING_TERMINATE(buf);
 	if (msg_verbose)
 	    msg_info("%s read: %s", VSTREAM_PATH(stream), STR(buf));
@@ -182,12 +185,15 @@ int     memcache_printf(VSTREAM *stream, const char *fmt,...)
     va_list ap;
     int     ret;
 
+    va_start(ap, fmt);
+
     if (msg_verbose) {
 	VSTRING *buf = vstring_alloc(100);
+	va_list ap2;
 
-	va_start(ap, fmt);
-	vstring_vsprintf(buf, fmt, ap);
-	va_end(ap);
+	VA_COPY(ap2, ap);
+	vstring_vsprintf(buf, fmt, ap2);
+	va_end(ap2);
 	msg_info("%s write: %s", VSTREAM_PATH(stream), STR(buf));
 	vstring_free(buf);
     }
@@ -195,7 +201,6 @@ int     memcache_printf(VSTREAM *stream, const char *fmt,...)
     /*
      * Do the I/O.
      */
-    va_start(ap, fmt);
     ret = memcache_vprintf(stream, fmt, ap);
     va_end(ap);
     return (ret);

@@ -43,6 +43,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -105,13 +110,17 @@ void    psc_conclude(PSC_STATE *state)
     if ((state->flags & PSC_STATE_MASK_ANY_PASS) != 0
 	&& (state->flags & PSC_STATE_MASK_ANY_PASS) ==
 	PSC_STATE_FLAGS_TODO_TO_PASS(state->flags & PSC_STATE_MASK_ANY_TODO))
-	msg_info("PASS %s [%s]:%s", (state->flags & PSC_STATE_FLAG_NEW) == 0 ?
+	msg_info("PASS %s [%s]:%s", (state->flags & PSC_STATE_FLAG_NEW) == 0
+		 || state->client_info->pass_new_count++ > 0 ?
 		 "OLD" : "NEW", PSC_CLIENT_ADDR_PORT(state));
 
     /*
      * Update the postscreen cache. This still supports a scenario where a
      * client gets whitelisted in the course of multiple sessions, as long as
-     * that client does not "fail" any test.
+     * that client does not "fail" any test. Don't try to optimize away cache
+     * updates; we want cached information to be up-to-date even if a test
+     * result is renewed during overlapping SMTP sessions, and even if
+     * 'postfix reload' happens in the middle of that.
      */
     if ((state->flags & PSC_STATE_MASK_ANY_UPDATE) != 0
 	&& psc_cache_map != 0) {

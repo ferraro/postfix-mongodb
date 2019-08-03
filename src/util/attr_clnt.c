@@ -54,6 +54,17 @@
 /* .IP "ATTR_CLNT_CTL_PROTO(ATTR_CLNT_PRINT_FN, ATTR_CLNT_SCAN_FN)"
 /*	Specifies alternatives for the attr_plain_print() and
 /*	attr_plain_scan() functions.
+/* .IP "ATTR_CLNT_CTL_REQ_LIMIT(int)"
+/*	The maximal number of requests per connection (default: 0,
+/*	i.e. no limit).  To enable the limit, specify a value greater
+/*	than zero.
+/* .IP "ATTR_CLNT_CTL_TRY_LIMIT(int)"
+/*	The maximal number of attempts to send a request before
+/*	giving up (default: 2). To disable the limit, specify a
+/*	value equal to zero.
+/* .IP "ATTR_CLNT_CTL_TRY_DELAY(int)"
+/*	The time in seconds between attempts to send a request
+/*	(default: 1).  Specify a value greater than zero.
 /* DIAGNOSTICS
 /*	Warnings: communication failure.
 /* SEE ALSO
@@ -85,6 +96,7 @@
 #include <htable.h>
 #include <attr.h>
 #include <iostuff.h>
+#include <compat_va_copy.h>
 #include <auto_clnt.h>
 #include <attr_clnt.h>
 
@@ -92,16 +104,25 @@
 
 struct ATTR_CLNT {
     AUTO_CLNT *auto_clnt;
+    /* Remaining properties are set with attr_clnt_control(). */
     ATTR_CLNT_PRINT_FN print;
     ATTR_CLNT_SCAN_FN scan;
+    int     req_limit;
+    int     req_count;
+    int     try_limit;
+    int     try_delay;
 };
+
+#define ATTR_CLNT_DEF_REQ_LIMIT	(0)	/* default per-session request limit */
+#define ATTR_CLNT_DEF_TRY_LIMIT	(2)	/* default request (re)try limit */
+#define ATTR_CLNT_DEF_TRY_DELAY	(1)	/* default request (re)try delay */
 
 /* attr_clnt_free - destroy attribute client */
 
 void    attr_clnt_free(ATTR_CLNT *client)
 {
     auto_clnt_free(client->auto_clnt);
-    myfree((char *) client);
+    myfree((void *) client);
 }
 
 /* attr_clnt_create - create attribute client */
@@ -115,6 +136,10 @@ ATTR_CLNT *attr_clnt_create(const char *service, int timeout,
     client->auto_clnt = auto_clnt_create(service, timeout, max_idle, max_ttl);
     client->scan = attr_vscan_plain;
     client->print = attr_vprint_plain;
+    client->req_limit = ATTR_CLNT_DEF_REQ_LIMIT;
+    client->req_count = 0;
+    client->try_limit = ATTR_CLNT_DEF_TRY_LIMIT;
+    client->try_delay = ATTR_CLNT_DEF_TRY_DELAY;
     return (client);
 }
 
@@ -125,6 +150,7 @@ int     attr_clnt_request(ATTR_CLNT *client, int send_flags,...)
     const char *myname = "attr_clnt_request";
     VSTREAM *stream;
     int     count = 0;
+    va_list saved_ap;
     va_list ap;
     int     type;
     int     recv_flags;
@@ -147,17 +173,19 @@ int     attr_clnt_request(ATTR_CLNT *client, int send_flags,...)
 	(void) va_arg(ap, t2); \
     }
 
+    /* Finalize argument lists before returning. */
+    va_start(saved_ap, send_flags);
     for (;;) {
 	errno = 0;
 	if ((stream = auto_clnt_access(client->auto_clnt)) != 0
 	    && readable(vstream_fileno(stream)) == 0) {
 	    errno = 0;
-	    va_start(ap, send_flags);
+	    VA_COPY(ap, saved_ap);
 	    err = (client->print(stream, send_flags, ap) != 0
 		   || vstream_fflush(stream) != 0);
 	    va_end(ap);
 	    if (err == 0) {
-		va_start(ap, send_flags);
+		VA_COPY(ap, saved_ap);
 		while ((type = va_arg(ap, int)) != ATTR_TYPE_END) {
 		    switch (type) {
 		    case ATTR_TYPE_STR:
@@ -183,20 +211,34 @@ int     attr_clnt_request(ATTR_CLNT *client, int send_flags,...)
 		recv_flags = va_arg(ap, int);
 		ret = client->scan(stream, recv_flags, ap);
 		va_end(ap);
-		if (ret > 0)
-		    return (ret);
+		/* Finalize argument lists before returning. */
+		if (ret > 0) {
+		    if (client->req_limit > 0
+			&& (client->req_count += 1) >= client->req_limit) {
+			auto_clnt_recover(client->auto_clnt);
+			client->req_count = 0;
+		    }
+		    break;
+		}
 	    }
 	}
-	if (++count >= 2
+	if ((++count >= client->try_limit && client->try_limit > 0)
 	    || msg_verbose
 	    || (errno && errno != EPIPE && errno != ENOENT && errno != ECONNRESET))
 	    msg_warn("problem talking to server %s: %m",
 		     auto_clnt_name(client->auto_clnt));
-	if (count >= 2)
-	    return (-1);
-	sleep(1);				/* XXX make configurable */
+	/* Finalize argument lists before returning. */
+	if (count >= client->try_limit && client->try_limit > 0) {
+	    ret = -1;
+	    break;
+	}
+	sleep(client->try_delay);
 	auto_clnt_recover(client->auto_clnt);
+	client->req_count = 0;
     }
+    /* Finalize argument lists before returning. */
+    va_end(saved_ap);
+    return (ret);
 }
 
 /* attr_clnt_control - fine control */
@@ -211,6 +253,29 @@ void    attr_clnt_control(ATTR_CLNT *client, int name,...)
 	case ATTR_CLNT_CTL_PROTO:
 	    client->print = va_arg(ap, ATTR_CLNT_PRINT_FN);
 	    client->scan = va_arg(ap, ATTR_CLNT_SCAN_FN);
+	    break;
+	case ATTR_CLNT_CTL_REQ_LIMIT:
+	    client->req_limit = va_arg(ap, int);
+	    if (client->req_limit < 0)
+		msg_panic("%s: bad request limit: %d",
+			  myname, client->req_limit);
+	    if (msg_verbose)
+		msg_info("%s: new request limit %d",
+			 myname, client->req_limit);
+	    break;
+	case ATTR_CLNT_CTL_TRY_LIMIT:
+	    client->try_limit = va_arg(ap, int);
+	    if (client->try_limit < 0)
+		msg_panic("%s: bad retry limit: %d", myname, client->try_limit);
+	    if (msg_verbose)
+		msg_info("%s: new retry limit %d", myname, client->try_limit);
+	    break;
+	case ATTR_CLNT_CTL_TRY_DELAY:
+	    client->try_delay = va_arg(ap, int);
+	    if (client->try_delay <= 0)
+		msg_panic("%s: bad retry delay: %d", myname, client->try_delay);
+	    if (msg_verbose)
+		msg_info("%s: new retry delay %d", myname, client->try_delay);
 	    break;
 	default:
 	    msg_panic("%s: bad name %d", myname, name);

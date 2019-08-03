@@ -12,6 +12,10 @@
 /*	TLS_SESS_STATE *tls_client_start(start_props)
 /*	const TLS_CLIENT_START_PROPS *start_props;
 /*
+/*	TLS_SESS_STATE *tls_client_post_connect(TLScontext, start_props)
+/*	TLS_SESS_STATE *TLScontext;
+/*	const TLS_CLIENT_START_PROPS *start_props;
+/*
 /*	void	tls_client_stop(app_ctx, stream, failure, TLScontext)
 /*	TLS_APPL_STATE *app_ctx;
 /*	VSTREAM	*stream;
@@ -83,19 +87,44 @@
 /* .IP TLScontext->peer_status
 /*	A bitmask field that records the status of the peer certificate
 /*	verification. This consists of one or more of
-/*	TLS_CERT_FLAG_PRESENT, TLS_CERT_FLAG_ALTNAME, TLS_CERT_FLAG_TRUSTED
-/*	and TLS_CERT_FLAG_MATCHED.
+/*	TLS_CERT_FLAG_PRESENT, TLS_CERT_FLAG_ALTNAME, TLS_CERT_FLAG_TRUSTED,
+/*	TLS_CERT_FLAG_MATCHED and TLS_CERT_FLAG_SECURED.
 /* .IP TLScontext->peer_CN
 /*	Extracted CommonName of the peer, or zero-length string if the
 /*	information could not be extracted.
 /* .IP TLScontext->issuer_CN
 /*	Extracted CommonName of the issuer, or zero-length string if the
 /*	information could not be extracted.
-/* .IP TLScontext->peer_fingerprint
+/* .IP TLScontext->peer_cert_fprint
 /*	At the fingerprint security level, if the peer presented a certificate
 /*	the fingerprint of the certificate.
 /* .PP
 /*	If no peer certificate is presented the peer_status is set to 0.
+/* EVENT_DRIVEN APPLICATIONS
+/* .ad
+/* .fi
+/*	Event-driven programs manage multiple I/O channels.  Such
+/*	programs cannot use the synchronous VSTREAM-over-TLS
+/*	implementation that the TLS library historically provides,
+/*	including tls_client_stop() and the underlying tls_stream(3)
+/*	and tls_bio_ops(3) routines.
+/*
+/*	With the current TLS library implementation, this means
+/*	that an event-driven application is responsible for calling
+/*	and retrying SSL_connect(), SSL_read(), SSL_write() and
+/*	SSL_shutdown().
+/*
+/*	To maintain control over TLS I/O, an event-driven client
+/*	invokes tls_client_start() with a null VSTREAM argument and
+/*	with an fd argument that specifies the I/O file descriptor.
+/*	Then, tls_client_start() performs all the necessary
+/*	preparations before the TLS handshake and returns a partially
+/*	populated TLS context. The event-driven application is then
+/*	responsible for invoking SSL_connect(), and if successful,
+/*	for invoking tls_client_post_connect() to finish the work
+/*	that was started by tls_client_start(). In case of unrecoverable
+/*	failure, tls_client_post_connect() destroys the TLS context
+/*	and returns a null pointer value.
 /* LICENSE
 /* .ad
 /* .fi
@@ -115,6 +144,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*
 /*	Victor Duchovni
 /*	Morgan Stanley
@@ -140,6 +174,7 @@
 #include <stringops.h>
 #include <msg.h>
 #include <iostuff.h>			/* non-blocking */
+#include <midna_domain.h>
 
 /* Global library. */
 
@@ -168,7 +203,7 @@ static SSL_SESSION *load_clnt_session(TLS_SESS_STATE *TLScontext)
      * Prepare the query.
      */
     if (TLScontext->log_mask & TLS_LOG_CACHE)
-	/* serverid already contains namaddrport information */
+	/* serverid contains transport:addr:port information */
 	msg_info("looking for session %s in %s cache",
 		 TLScontext->serverid, TLScontext->cache_type);
 
@@ -190,7 +225,7 @@ static SSL_SESSION *load_clnt_session(TLS_SESS_STATE *TLScontext)
 	session = tls_session_activate(STR(session_data), LEN(session_data));
 	if (session) {
 	    if (TLScontext->log_mask & TLS_LOG_CACHE)
-		/* serverid already contains namaddrport information */
+		/* serverid contains transport:addr:port information */
 		msg_info("reloaded session %s from %s cache",
 			 TLScontext->serverid, TLScontext->cache_type);
 	}
@@ -230,24 +265,9 @@ static int new_client_session_cb(SSL *ssl, SSL_SESSION *session)
 		  myname);
 
     if (TLScontext->log_mask & TLS_LOG_CACHE)
-	/* serverid already contains namaddrport information */
+	/* serverid contains transport:addr:port information */
 	msg_info("save session %s to %s cache",
 		 TLScontext->serverid, TLScontext->cache_type);
-
-#if (OPENSSL_VERSION_NUMBER < 0x00906011L) || (OPENSSL_VERSION_NUMBER == 0x00907000L)
-
-    /*
-     * Ugly Hack: OpenSSL before 0.9.6a does not store the verify result in
-     * sessions for the client side. We modify the session directly which is
-     * version specific, but this bug is version specific, too.
-     * 
-     * READ: 0-09-06-01-1 = 0-9-6-a-beta1: all versions before beta1 have this
-     * bug, it has been fixed during development of 0.9.6a. The development
-     * version of 0.9.7 can have this bug, too. It has been fixed on
-     * 2000/11/29.
-     */
-    session->verify_result = SSL_get_verify_result(TLScontext->con);
-#endif
 
     /*
      * Passivate and save the session object. Errors are non-fatal, since
@@ -278,7 +298,7 @@ static void uncache_session(SSL_CTX *ctx, TLS_SESS_STATE *TLScontext)
 	return;
 
     if (TLScontext->log_mask & TLS_LOG_CACHE)
-	/* serverid already contains namaddrport information */
+	/* serverid contains transport:addr:port information */
 	msg_info("remove session %s from client cache", TLScontext->serverid);
 
     tls_mgr_delete(TLScontext->cache_type, TLScontext->serverid);
@@ -290,10 +310,9 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
 {
     long    off = 0;
     int     cachable;
+    int     scache_timeout;
     SSL_CTX *client_ctx;
     TLS_APPL_STATE *app_ctx;
-    const EVP_MD *md_alg;
-    unsigned int md_len;
     int     log_mask;
 
     /*
@@ -314,6 +333,8 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      */
     tls_check_version();
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+
     /*
      * Initialize the OpenSSL library by the book! To start with, we must
      * initialize the algorithms. We want cleartext error messages instead of
@@ -321,6 +342,7 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      */
     SSL_load_error_strings();
     OpenSSL_add_ssl_algorithms();
+#endif
 
     /*
      * Create an application data index for SSL objects, so that we can
@@ -339,18 +361,8 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      * If the administrator specifies an unsupported digest algorithm, fail
      * now, rather than in the middle of a TLS handshake.
      */
-    if ((md_alg = EVP_get_digestbyname(props->fpt_dgst)) == 0) {
-	msg_warn("Digest algorithm \"%s\" not found: disabling TLS support",
-		 props->fpt_dgst);
-	return (0);
-    }
-
-    /*
-     * Sanity check: Newer shared libraries may use larger digests.
-     */
-    if ((md_len = EVP_MD_size(md_alg)) > EVP_MAX_MD_SIZE) {
-	msg_warn("Digest algorithm \"%s\" output size %u too large:"
-		 " disabling TLS support", props->fpt_dgst, md_len);
+    if (!tls_validate_digest(props->mdalg)) {
+	msg_warn("disabling TLS support");
 	return (0);
     }
 
@@ -374,11 +386,16 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      * this with the options setting later, anyhow.
      */
     ERR_clear_error();
-    if ((client_ctx = SSL_CTX_new(SSLv23_client_method())) == 0) {
+    client_ctx = SSL_CTX_new(TLS_client_method());
+    if (client_ctx == 0) {
 	msg_warn("cannot allocate client SSL_CTX: disabling TLS support");
 	tls_print_errors();
 	return (0);
     }
+#ifdef SSL_SECOP_PEER
+    /* Backwards compatible security as a base for opportunistic TLS. */
+    SSL_CTX_set_security_level(client_ctx, 0);
+#endif
 
     /*
      * See the verify callback in tls_verify.c
@@ -436,6 +453,7 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      * uses certificates).
      */
     if (tls_set_my_certificate_key_info(client_ctx,
+					props->chain_files,
 					props->cert_file,
 					props->key_file,
 					props->dcert_file,
@@ -448,11 +466,24 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
     }
 
     /*
+     * 2015-12-05: Ephemeral RSA removed from OpenSSL 1.1.0-dev
+     */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+
+    /*
      * According to the OpenSSL documentation, temporary RSA key is needed
      * export ciphers are in use. We have to provide one, so well, we just do
      * it.
      */
     SSL_CTX_set_tmp_rsa_callback(client_ctx, tls_tmp_rsa_cb);
+#endif
+
+    /*
+     * With OpenSSL 1.0.2 and later the client EECDH curve list becomes
+     * configurable with the preferred curve negotiated via the supported
+     * curves extension.
+     */
+    tls_auto_eecdh_curves(client_ctx, var_tls_eecdh_auto);
 
     /*
      * Finally, the setup for the server certificate checking, done "by the
@@ -472,14 +503,17 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
      * sessions from the external cache, so we must delete them directly (not
      * via a callback).
      */
-    if (tls_mgr_policy(props->cache_type, &cachable) != TLS_MGR_STAT_OK)
+    if (tls_mgr_policy(props->cache_type, &cachable,
+		       &scache_timeout) != TLS_MGR_STAT_OK)
+	scache_timeout = 0;
+    if (scache_timeout <= 0)
 	cachable = 0;
 
     /*
      * Allocate an application context, and populate with mandatory protocol
      * and cipher data.
      */
-    app_ctx = tls_alloc_app_context(client_ctx, log_mask);
+    app_ctx = tls_alloc_app_context(client_ctx, 0, log_mask);
 
     /*
      * The external session cache is implemented by the tlsmgr(8) process.
@@ -511,69 +545,141 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
 				       SSL_SESS_CACHE_NO_INTERNAL_STORE |
 				       SSL_SESS_CACHE_NO_AUTO_CLEAR);
 	SSL_CTX_sess_set_new_cb(client_ctx, new_client_session_cb);
+
+	/*
+	 * OpenSSL ignores timed-out sessions. We need to set the internal
+	 * cache timeout at least as high as the external cache timeout. This
+	 * applies even if no internal cache is used.  We set the session to
+	 * twice the cache lifetime.  This way a session always lasts longer
+	 * than its lifetime in the cache.
+	 */
+	SSL_CTX_set_timeout(client_ctx, 2 * scache_timeout);
     }
     return (app_ctx);
 }
 
-/* match_hostname -  match hostname against pattern */
+/* match_servername -  match servername against pattern */
 
-static int match_hostname(const char *peerid,
-			          const TLS_CLIENT_START_PROPS *props)
+static int match_servername(const char *certid,
+			            const TLS_CLIENT_START_PROPS *props)
 {
     const ARGV *cmatch_argv;
     const char *nexthop = props->nexthop;
     const char *hname = props->host;
-    const char *pattern;
-    const char *pattern_left;
-    int     sub;
+    const char *domain;
+    const char *parent;
+    const char *aname;
+    int     match_subdomain;
     int     i;
     int     idlen;
-    int     patlen;
+    int     domlen;
 
     if ((cmatch_argv = props->matchargv) == 0)
 	return 0;
 
+#ifndef NO_EAI
+
     /*
-     * Match the peerid against each pattern until we find a match.
+     * DNS subjectAltNames are required to be ASCII.
+     * 
+     * Per RFC 6125 Section 6.4.4 Matching the CN-ID, follows the same rules
+     * (6.4.1, 6.4.2 and 6.4.3) that apply to subjectAltNames.  In
+     * particular, 6.4.2 says that the reference identifier is coerced to
+     * ASCII, but no conversion is stated or implied for the CN-ID, so it
+     * seems it only matches if it is all ASCII.  Otherwise, it is some other
+     * sort of name.
+     */
+    if (!allascii(certid))
+	return (0);
+    if (!allascii(nexthop) && (aname = midna_domain_to_ascii(nexthop)) != 0) {
+	if (msg_verbose)
+	    msg_info("%s asciified to %s", nexthop, aname);
+	nexthop = aname;
+    }
+#endif
+
+    /*
+     * Match the certid against each pattern until we find a match.
      */
     for (i = 0; i < cmatch_argv->argc; ++i) {
-	sub = 0;
+	match_subdomain = 0;
 	if (!strcasecmp(cmatch_argv->argv[i], "nexthop"))
-	    pattern = nexthop;
+	    domain = nexthop;
 	else if (!strcasecmp(cmatch_argv->argv[i], "hostname"))
-	    pattern = hname;
+	    domain = hname;
 	else if (!strcasecmp(cmatch_argv->argv[i], "dot-nexthop")) {
-	    pattern = nexthop;
-	    sub = 1;
+	    domain = nexthop;
+	    match_subdomain = 1;
 	} else {
-	    pattern = cmatch_argv->argv[i];
-	    if (*pattern == '.' && pattern[1] != '\0') {
-		++pattern;
-		sub = 1;
+	    domain = cmatch_argv->argv[i];
+	    if (*domain == '.') {
+		if (domain[1]) {
+		    ++domain;
+		    match_subdomain = 1;
+		}
 	    }
+#ifndef NO_EAI
+
+	    /*
+	     * Besides U+002E (full stop) IDNA2003 allows labels to be
+	     * separated by any of the Unicode variants U+3002 (ideographic
+	     * full stop), U+FF0E (fullwidth full stop), and U+FF61
+	     * (halfwidth ideographic full stop). Their respective UTF-8
+	     * encodings are: E38082, EFBC8E and EFBDA1.
+	     * 
+	     * IDNA2008 does not permit (upper) case and other variant
+	     * differences in U-labels. The midna_domain_to_ascii() function,
+	     * based on UTS46, normalizes such differences away.
+	     * 
+	     * The IDNA to_ASCII conversion does not allow empty leading labels,
+	     * so we handle these explicitly here.
+	     */
+	    else {
+		unsigned char *cp = (unsigned char *) domain;
+
+		if ((cp[0] == 0xe3 && cp[1] == 0x80 && cp[2] == 0x82)
+		    || (cp[0] == 0xef && cp[1] == 0xbc && cp[2] == 0x8e)
+		    || (cp[0] == 0xef && cp[1] == 0xbd && cp[2] == 0xa1)) {
+		    if (domain[3]) {
+			domain = domain + 3;
+			match_subdomain = 1;
+		    }
+		}
+	    }
+	    if (!allascii(domain)
+		&& (aname = midna_domain_to_ascii(domain)) != 0) {
+		if (msg_verbose)
+		    msg_info("%s asciified to %s", domain, aname);
+		domain = aname;
+	    }
+#endif
 	}
 
 	/*
-	 * Sub-domain match: peerid is any sub-domain of pattern.
+	 * Sub-domain match: certid is any sub-domain of hostname.
 	 */
-	if (sub) {
-	    if ((idlen = strlen(peerid)) > (patlen = strlen(pattern)) + 1
-		&& peerid[idlen - patlen - 1] == '.'
-		&& !strcasecmp(peerid + (idlen - patlen), pattern))
+	if (match_subdomain) {
+	    if ((idlen = strlen(certid)) > (domlen = strlen(domain)) + 1
+		&& certid[idlen - domlen - 1] == '.'
+		&& !strcasecmp(certid + (idlen - domlen), domain))
 		return (1);
 	    else
 		continue;
 	}
 
 	/*
-	 * Exact match and initial "*" match. The initial "*" in a peerid
-	 * matches exactly one hostname component, under the condition that
-	 * the peerid contains multiple hostname components.
+	 * Exact match and initial "*" match. The initial "*" in a certid
+	 * matches one (if var_tls_multi_label is false) or more hostname
+	 * components under the condition that the certid contains multiple
+	 * hostname components.
 	 */
-	if (!strcasecmp(peerid, pattern)
-	    || (peerid[0] == '*' && peerid[1] == '.' && peerid[2] != 0
-		&& (pattern_left = strchr(pattern, '.')) != 0
-		&& strcasecmp(pattern_left + 1, peerid + 2) == 0))
+	if (!strcasecmp(certid, domain)
+	    || (certid[0] == '*' && certid[1] == '.' && certid[2] != 0
+		&& (parent = strchr(domain, '.')) != 0
+		&& (idlen = strlen(certid + 1)) <= (domlen = strlen(parent))
+		&& strcasecmp(var_tls_multi_wildcard == 0 ? parent :
+			      parent + domlen - idlen,
+			      certid + 1) == 0))
 	    return (1);
     }
     return (0);
@@ -593,8 +699,7 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
     int     verbose;
     const char *dnsname;
     const GENERAL_NAME *gn;
-
-    STACK_OF(GENERAL_NAME) * gens;
+    general_name_stack_t *gens;
 
     /*
      * On exit both peer_CN and issuer_CN should be set.
@@ -607,7 +712,13 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
     if (SSL_get_verify_result(TLScontext->con) == X509_V_OK)
 	TLScontext->peer_status |= TLS_CERT_FLAG_TRUSTED;
 
-    if (TLS_CERT_IS_TRUSTED(TLScontext) && props->tls_level >= TLS_LEV_VERIFY)
+    /*
+     * With fingerprint or dane we may already be done. Otherwise, verify the
+     * peername if using traditional PKI or DANE with trust-anchors.
+     */
+    if (!TLS_CERT_IS_MATCHED(TLScontext)
+	&& TLS_CERT_IS_TRUSTED(TLScontext)
+	&& TLS_MUST_TRUST(props->tls_level))
 	verify_peername = 1;
 
     /* Force cert processing so we can log the data? */
@@ -658,7 +769,7 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
 		TLScontext->peer_status |= TLS_CERT_FLAG_ALTNAME;
 		dnsname = tls_dns_name(gn, TLScontext);
 		if (dnsname && *dnsname) {
-		    if ((dnsname_match = match_hostname(dnsname, props)) != 0)
+		    if ((dnsname_match = match_servername(dnsname, props)) != 0)
 			matched++;
 		    /* Keep the first matched name. */
 		    if (TLScontext->peer_CN
@@ -692,7 +803,7 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
 	if (TLScontext->peer_CN == 0) {
 	    TLScontext->peer_CN = tls_peer_CN(peercert, TLScontext);
 	    if (*TLScontext->peer_CN)
-		matched = match_hostname(TLScontext->peer_CN, props);
+		matched = match_servername(TLScontext->peer_CN, props);
 	    if (verify_peername && matched)
 		TLScontext->peer_status |= TLS_CERT_FLAG_MATCHED;
 	    if (verbose)
@@ -712,16 +823,19 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
 	TLScontext->peer_CN = tls_peer_CN(peercert, TLScontext);
 
     /*
-     * Give them a clue. Problems with trust chain verification were logged
-     * when the session was first negotiated, before the session was stored
+     * Give them a clue. Problems with trust chain verification are logged
+     * when the session is first negotiated, before the session is stored
      * into the cache. We don't want mystery failures, so log the fact the
      * real problem is to be found in the past.
      */
-    if (TLScontext->session_reused
-	&& !TLS_CERT_IS_TRUSTED(TLScontext)
-	&& (TLScontext->log_mask & TLS_LOG_UNTRUSTED))
-	msg_info("%s: re-using session with untrusted certificate, "
-		 "look for details earlier in the log", props->namaddr);
+    if (!TLS_CERT_IS_TRUSTED(TLScontext)
+	&& (TLScontext->log_mask & TLS_LOG_UNTRUSTED)) {
+	if (TLScontext->session_reused == 0)
+	    tls_log_verify_error(TLScontext);
+	else
+	    msg_info("%s: re-using session with untrusted certificate, "
+		     "look for details earlier in the log", props->namaddr);
+    }
 }
 
 /* verify_extract_print - extract and verify peer fingerprint */
@@ -729,25 +843,22 @@ static void verify_extract_name(TLS_SESS_STATE *TLScontext, X509 *peercert,
 static void verify_extract_print(TLS_SESS_STATE *TLScontext, X509 *peercert,
 				         const TLS_CLIENT_START_PROPS *props)
 {
-    char  **cpp;
-
-    /* Non-null by contract */
-    TLScontext->peer_fingerprint = tls_fingerprint(peercert, props->fpt_dgst);
-    TLScontext->peer_pkey_fprint = tls_pkey_fprint(peercert, props->fpt_dgst);
+    TLScontext->peer_cert_fprint = tls_cert_fprint(peercert, props->mdalg);
+    TLScontext->peer_pkey_fprint = tls_pkey_fprint(peercert, props->mdalg);
 
     /*
-     * Compare the fingerprint against each acceptable value, ignoring
-     * upper/lower case differences.
+     * Whether the level is "dane" or "fingerprint" when the peer certificate
+     * is matched without resorting to a separate CA, we set both the trusted
+     * and matched bits.  This simplifies logic in smtp_proto.c where "dane"
+     * must be trusted and matched, since some "dane" TLSA RRsets do use CAs.
+     * 
+     * This also suppresses spurious logging of the peer certificate as
+     * untrusted in verify_extract_name().
      */
-    if (props->tls_level == TLS_LEV_FPRINT) {
-	for (cpp = props->matchargv->argv; *cpp; ++cpp) {
-	    if (strcasecmp(TLScontext->peer_fingerprint, *cpp) == 0
-		|| strcasecmp(TLScontext->peer_pkey_fprint, *cpp) == 0) {
-		TLScontext->peer_status |= TLS_CERT_FLAG_MATCHED;
-		break;
-	    }
-	}
-    }
+    if (TLS_DANE_HASEE(props->dane)
+	&& tls_dane_match(TLScontext, TLS_DANE_EE, peercert, 0))
+	TLScontext->peer_status |=
+	    TLS_CERT_FLAG_TRUSTED | TLS_CERT_FLAG_MATCHED;
 }
 
  /*
@@ -760,19 +871,20 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     int     sts;
     int     protomask;
     const char *cipher_list;
-    SSL_SESSION *session;
-    const SSL_CIPHER *cipher;
-    X509   *peercert;
+    SSL_SESSION *session = 0;
     TLS_SESS_STATE *TLScontext;
     TLS_APPL_STATE *app_ctx = props->ctx;
-    VSTRING *myserverid;
+    const char *sni = 0;
+    char   *myserverid;
     int     log_mask = app_ctx->log_mask;
 
     /*
      * When certificate verification is required, log trust chain validation
-     * errors even when disabled by default for opportunistic sessions.
+     * errors even when disabled by default for opportunistic sessions. For
+     * DANE this only applies when using trust-anchor associations.
      */
-    if (props->tls_level >= TLS_LEV_VERIFY)
+    if (TLS_MUST_TRUST(props->tls_level)
+      && (!TLS_DANE_BASED(props->tls_level) || TLS_DANE_HASTA(props->dane)))
 	log_mask |= TLS_LOG_UNTRUSTED;
 
     if (log_mask & TLS_LOG_VERBOSE)
@@ -781,19 +893,8 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     /*
      * First make sure we have valid protocol and cipher parameters
      * 
-     * The cipherlist will be applied to the global SSL context, where it can be
-     * repeatedly reset if necessary, but the protocol restrictions will be
-     * is applied to the SSL connection, because protocol restrictions in the
-     * global context cannot be cleared.
-     */
-
-    /*
-     * OpenSSL will ignore cached sessions that use the wrong protocol. So we
-     * do not need to filter out cached sessions with the "wrong" protocol,
-     * rather OpenSSL will simply negotiate a new session.
-     * 
-     * Still, we salt the session lookup key with the protocol list, so that
-     * sessions found in the cache are always acceptable.
+     * Per-session protocol restrictions must be applied to the SSL connection,
+     * as restrictions in the global context cannot be cleared.
      */
     protomask = tls_protocol_mask(props->protocols);
     if (protomask == TLS_PROTOCOL_INVALID) {
@@ -802,35 +903,9 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 		 props->namaddr, props->protocols);
 	return (0);
     }
-    myserverid = vstring_alloc(100);
-    vstring_sprintf_append(myserverid, "%s&p=%d", props->serverid, protomask);
-
-    /*
-     * Per session cipher selection for sessions with mandatory encryption
-     * 
-     * By the time a TLS client is negotiating ciphers it has already offered to
-     * re-use a session, it is too late to renege on the offer. So we must
-     * not attempt to re-use sessions whose ciphers are too weak. We salt the
-     * session lookup key with the cipher list, so that sessions found in the
-     * cache are always acceptable.
-     */
-    cipher_list = tls_set_ciphers(app_ctx, "TLS", props->cipher_grade,
-				  props->cipher_exclusions);
-    if (cipher_list == 0) {
-	msg_warn("%s: %s: aborting TLS session",
-		 props->namaddr, vstring_str(app_ctx->why));
-	vstring_free(myserverid);
-	return (0);
-    }
-    if (log_mask & TLS_LOG_VERBOSE)
-	msg_info("%s: TLS cipher list \"%s\"", props->namaddr, cipher_list);
-    vstring_sprintf_append(myserverid, "&c=%s", cipher_list);
-
-    /*
-     * Finally, salt the session key with the OpenSSL library version,
-     * (run-time, rather than compile-time, just in case that matters).
-     */
-    vstring_sprintf_append(myserverid, "&l=%ld", (long) SSLeay());
+    /* DANE requires SSLv3 or later, not SSLv2. */
+    if (TLS_DANE_BASED(props->tls_level))
+	protomask |= TLS_PROTOCOL_SSLv2;
 
     /*
      * Allocate a new TLScontext for the new connection and get an SSL
@@ -843,15 +918,62 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     TLScontext = tls_alloc_sess_context(log_mask, props->namaddr);
     TLScontext->cache_type = app_ctx->cache_type;
 
-    TLScontext->serverid = vstring_export(myserverid);
-    TLScontext->stream = props->stream;
-
     if ((TLScontext->con = SSL_new(app_ctx->ssl_ctx)) == NULL) {
 	msg_warn("Could not allocate 'TLScontext->con' with SSL_new()");
 	tls_print_errors();
 	tls_free_context(TLScontext);
 	return (0);
     }
+
+    /*
+     * Per session cipher selection for sessions with mandatory encryption
+     * 
+     * The cipherlist is applied to the global SSL context, since it is likely
+     * to stay the same between connections, so we make use of a 1-element
+     * cache to return the same result for identical inputs.
+     */
+    cipher_list = tls_set_ciphers(TLScontext, props->cipher_grade,
+				  props->cipher_exclusions);
+    if (cipher_list == 0) {
+	/* already warned */
+	tls_free_context(TLScontext);
+	return (0);
+    }
+    if (log_mask & TLS_LOG_VERBOSE)
+	msg_info("%s: TLS cipher list \"%s\"", props->namaddr, cipher_list);
+
+    /*
+     * OpenSSL will ignore cached sessions that use the wrong protocol. So we
+     * do not need to filter out cached sessions with the "wrong" protocol,
+     * rather OpenSSL will simply negotiate a new session.
+     * 
+     * We salt the session lookup key with the protocol list, so that sessions
+     * found in the cache are plausibly acceptable.
+     * 
+     * By the time a TLS client is negotiating ciphers it has already offered to
+     * re-use a session, it is too late to renege on the offer. So we must
+     * not attempt to re-use sessions whose ciphers are too weak. We salt the
+     * session lookup key with the cipher list, so that sessions found in the
+     * cache are always acceptable.
+     * 
+     * With DANE, (more generally any TLScontext where we specified explicit
+     * trust-anchor or end-entity certificates) the verification status of
+     * the SSL session depends on the specified list.  Since we verify the
+     * certificate only during the initial handshake, we must segregate
+     * sessions with different TA lists.  Note, that TA re-verification is
+     * not possible with cached sessions, since these don't hold the complete
+     * peer trust chain.  Therefore, we compute a digest of the sorted TA
+     * parameters and append it to the serverid.
+     */
+    myserverid = tls_serverid_digest(props, protomask, cipher_list);
+
+    TLScontext->serverid = myserverid;
+    TLScontext->stream = props->stream;
+    TLScontext->mdalg = props->mdalg;
+
+    /* Alias DANE digest info from props */
+    TLScontext->dane = props->dane;
+
     if (!SSL_set_ex_data(TLScontext->con, TLScontext_index, TLScontext)) {
 	msg_warn("Could not set application data for 'TLScontext->con'");
 	tls_print_errors();
@@ -863,12 +985,13 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      * Apply session protocol restrictions.
      */
     if (protomask != 0)
-	SSL_set_options(TLScontext->con,
-		   ((protomask & TLS_PROTOCOL_TLSv1) ? SSL_OP_NO_TLSv1 : 0L)
-	     | ((protomask & TLS_PROTOCOL_TLSv1_1) ? SSL_OP_NO_TLSv1_1 : 0L)
-	     | ((protomask & TLS_PROTOCOL_TLSv1_2) ? SSL_OP_NO_TLSv1_2 : 0L)
-		 | ((protomask & TLS_PROTOCOL_SSLv3) ? SSL_OP_NO_SSLv3 : 0L)
-	       | ((protomask & TLS_PROTOCOL_SSLv2) ? SSL_OP_NO_SSLv2 : 0L));
+	SSL_set_options(TLScontext->con, TLS_SSL_OP_PROTOMASK(protomask));
+
+#ifdef SSL_SECOP_PEER
+    /* When authenticating the peer, use 80-bit plus OpenSSL security level */
+    if (TLS_MUST_MATCH(props->tls_level))
+	SSL_set_security_level(TLScontext->con, 1);
+#endif
 
     /*
      * XXX To avoid memory leaks we must always call SSL_SESSION_free() after
@@ -880,24 +1003,57 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 	if (session) {
 	    SSL_set_session(TLScontext->con, session);
 	    SSL_SESSION_free(session);		/* 200411 */
-#if (OPENSSL_VERSION_NUMBER < 0x00906011L) || (OPENSSL_VERSION_NUMBER == 0x00907000L)
-
-	    /*
-	     * Ugly Hack: OpenSSL before 0.9.6a does not store the verify
-	     * result in sessions for the client side. We modify the session
-	     * directly which is version specific, but this bug is version
-	     * specific, too.
-	     * 
-	     * READ: 0-09-06-01-1 = 0-9-6-a-beta1: all versions before beta1
-	     * have this bug, it has been fixed during development of 0.9.6a.
-	     * The development version of 0.9.7 can have this bug, too. It
-	     * has been fixed on 2000/11/29.
-	     */
-	    SSL_set_verify_result(TLScontext->con, session->verify_result);
-#endif
-
 	}
     }
+#ifdef TLSEXT_MAXLEN_host_name
+    if (TLS_DANE_BASED(props->tls_level)) {
+
+	/*
+	 * With DANE sessions, send an SNI hint.  We don't care whether the
+	 * server reports finding a matching certificate or not, so no
+	 * callback is required to process the server response.  Our use of
+	 * SNI is limited to giving servers that are (mis)configured to use
+	 * SNI the best opportunity to find the certificate they promised via
+	 * the associated TLSA RRs.  (Generally, server administrators should
+	 * avoid SNI, and there are no plans to support SNI in the Postfix
+	 * SMTP server).
+	 * 
+	 * Since the hostname is DNSSEC-validated, it must be a DNS FQDN and
+	 * thererefore valid for use with SNI.
+	 */
+	sni = props->host;
+    } else if (props->sni && *props->sni) {
+	if (strcmp(props->sni, "hostname") == 0)
+	    sni = props->host;
+	else if (strcmp(props->sni, "nexthop") == 0)
+	    sni = props->nexthop;
+	else
+	    sni = props->sni;
+    }
+    if (sni && strlen(sni) <= TLSEXT_MAXLEN_host_name) {
+
+	/*
+	 * Failure to set a valid SNI hostname is a memory allocation error,
+	 * and thus transient.  Since we must not cache the session if we
+	 * failed to send the SNI name, we have little choice but to abort.
+	 */
+	if (!SSL_set_tlsext_host_name(TLScontext->con, sni)) {
+	    msg_warn("%s: error setting SNI hostname to: %s", props->namaddr,
+		     sni);
+	    tls_free_context(TLScontext);
+	    return (0);
+	}
+	/*
+	 * The saved value is not presently used client-side, but could later
+	 * be logged if acked by the server (requires new client-side callback
+	 * to detect the ack).  For now this just maintains symmetry with the
+	 * server code, where do record the received SNI for logging.
+	 */
+	TLScontext->peer_sni = mystrdup(sni);
+	if (log_mask & TLS_LOG_DEBUG)
+	    msg_info("%s: SNI hostname: %s", props->namaddr, sni);
+    }
+#endif
 
     /*
      * Before really starting anything, try to seed the PRNG a little bit
@@ -907,28 +1063,16 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     (void) tls_ext_seed(var_tls_daemon_rand_bytes);
 
     /*
-     * Initialize the SSL connection to connect state. This should not be
-     * necessary anymore since 0.9.3, but the call is still in the library
-     * and maintaining compatibility never hurts.
-     */
-    SSL_set_connect_state(TLScontext->con);
-
-    /*
      * Connect the SSL connection with the network socket.
      */
-    if (SSL_set_fd(TLScontext->con, vstream_fileno(props->stream)) != 1) {
+    if (SSL_set_fd(TLScontext->con, props->stream == 0 ? props->fd :
+		   vstream_fileno(props->stream)) != 1) {
 	msg_info("SSL_set_fd error to %s", props->namaddr);
 	tls_print_errors();
 	uncache_session(app_ctx->ssl_ctx, TLScontext);
 	tls_free_context(TLScontext);
 	return (0);
     }
-
-    /*
-     * Turn on non-blocking I/O so that we can enforce timeouts on network
-     * I/O.
-     */
-    non_blocking(vstream_fileno(props->stream), NON_BLOCKING);
 
     /*
      * If the debug level selected is high enough, all of the data is dumped:
@@ -941,6 +1085,21 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      */
     if (log_mask & TLS_LOG_TLSPKTS)
 	BIO_set_callback(SSL_get_rbio(TLScontext->con), tls_bio_dump_cb);
+
+    tls_dane_set_callback(app_ctx->ssl_ctx, TLScontext);
+
+    /*
+     * If we don't trigger the handshake in the library, leave control over
+     * SSL_connect/read/write/etc with the application.
+     */
+    if (props->stream == 0)
+	return (TLScontext);
+
+    /*
+     * Turn on non-blocking I/O so that we can enforce timeouts on network
+     * I/O.
+     */
+    non_blocking(vstream_fileno(props->stream), NON_BLOCKING);
 
     /*
      * Start TLS negotiations. This process is a black box that invokes our
@@ -965,8 +1124,19 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 	tls_free_context(TLScontext);
 	return (0);
     }
+    return (tls_client_post_connect(TLScontext, props));
+}
+
+/* tls_client_post_connect - post-handshake processing */
+
+TLS_SESS_STATE *tls_client_post_connect(TLS_SESS_STATE *TLScontext,
+				        const TLS_CLIENT_START_PROPS *props)
+{
+    const SSL_CIPHER *cipher;
+    X509   *peercert;
+
     /* Turn off packet dump if only dumping the handshake */
-    if ((log_mask & TLS_LOG_ALLPKTS) == 0)
+    if ((TLScontext->log_mask & TLS_LOG_ALLPKTS) == 0)
 	BIO_set_callback(SSL_get_rbio(TLScontext->con), 0);
 
     /*
@@ -974,7 +1144,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      * session was negotiated.
      */
     TLScontext->session_reused = SSL_session_reused(TLScontext->con);
-    if ((log_mask & TLS_LOG_CACHE) && TLScontext->session_reused)
+    if ((TLScontext->log_mask & TLS_LOG_CACHE) && TLScontext->session_reused)
 	msg_info("%s: Reusing old session", TLScontext->namaddr);
 
     /*
@@ -986,23 +1156,25 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 
 	/*
 	 * Peer name or fingerprint verification as requested.
-	 * Unconditionally set peer_CN, issuer_CN and peer_fingerprint.
+	 * Unconditionally set peer_CN, issuer_CN and peer_cert_fprint. Check
+	 * fingerprint first, and avoid logging verified as untrusted in the
+	 * call to verify_extract_name().
 	 */
-	verify_extract_name(TLScontext, peercert, props);
 	verify_extract_print(TLScontext, peercert, props);
+	verify_extract_name(TLScontext, peercert, props);
 
 	if (TLScontext->log_mask &
 	    (TLS_LOG_CERTMATCH | TLS_LOG_VERBOSE | TLS_LOG_PEERCERT))
 	    msg_info("%s: subject_CN=%s, issuer_CN=%s, "
-		     "fingerprint %s, pkey_fingerprint=%s", props->namaddr,
+		     "fingerprint=%s, pkey_fingerprint=%s", props->namaddr,
 		     TLScontext->peer_CN, TLScontext->issuer_CN,
-		     TLScontext->peer_fingerprint,
+		     TLScontext->peer_cert_fprint,
 		     TLScontext->peer_pkey_fprint);
 	X509_free(peercert);
     } else {
 	TLScontext->issuer_CN = mystrdup("");
 	TLScontext->peer_CN = mystrdup("");
-	TLScontext->peer_fingerprint = mystrdup("");
+	TLScontext->peer_cert_fprint = mystrdup("");
 	TLScontext->peer_pkey_fprint = mystrdup("");
     }
 
@@ -1019,17 +1191,28 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      * The TLS engine is active. Switch to the tls_timed_read/write()
      * functions and make the TLScontext available to those functions.
      */
-    tls_stream_start(props->stream, TLScontext);
+    if (TLScontext->stream != 0)
+	tls_stream_start(props->stream, TLScontext);
 
     /*
-     * All the key facts in a single log entry.
+     * Fully secured only if trusted, matched and not insecure like halfdane.
+     * Should perhaps also exclude "verify" (as opposed to "secure") here,
+     * because that can be subject to insecure MX indirection, but that's
+     * rather incompatible.  Users have been warned.
      */
-    if (log_mask & TLS_LOG_SUMMARY)
-	msg_info("%s TLS connection established to %s: %s with cipher %s "
-	      "(%d/%d bits)", TLS_CERT_IS_MATCHED(TLScontext) ? "Verified" :
-		 TLS_CERT_IS_TRUSTED(TLScontext) ? "Trusted" : "Untrusted",
-	      props->namaddr, TLScontext->protocol, TLScontext->cipher_name,
-		 TLScontext->cipher_usebits, TLScontext->cipher_algbits);
+    if (TLS_CERT_IS_PRESENT(TLScontext)
+	&& TLS_CERT_IS_TRUSTED(TLScontext)
+	&& TLS_CERT_IS_MATCHED(TLScontext)
+	&& !TLS_NEVER_SECURED(props->tls_level))
+	TLScontext->peer_status |= TLS_CERT_FLAG_SECURED;
+
+    /*
+     * With the handshake done, extract TLS 1.3 signature metadata.
+     */
+    tls_get_signature_params(TLScontext);
+
+    if (TLScontext->log_mask & TLS_LOG_SUMMARY)
+	tls_log_summary(TLS_ROLE_CLIENT, TLS_USAGE_NEW, TLScontext);
 
     tls_int_seed();
 

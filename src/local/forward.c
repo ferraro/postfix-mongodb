@@ -48,6 +48,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -79,6 +84,7 @@
 #include <mail_date.h>
 #include <mail_params.h>
 #include <dsn_mask.h>
+#include <smtputf8.h>
 
 /* Application-specific. */
 
@@ -118,6 +124,11 @@ static FORWARD_INFO *forward_open(DELIVER_REQUEST *request, const char *sender)
     FORWARD_INFO *info;
     VSTREAM *cleanup;
 
+#define FORWARD_OPEN_RETURN(res) do { \
+	vstring_free(buffer); \
+	return (res); \
+    } while (0)
+
     /*
      * Contact the cleanup service and save the new mail queue id. Request
      * that the cleanup service bounces bad messages to the sender so that we
@@ -128,24 +139,31 @@ static FORWARD_INFO *forward_open(DELIVER_REQUEST *request, const char *sender)
      * ourselves is that we don't really know who the recipients are.
      */
     cleanup = mail_connect(MAIL_CLASS_PUBLIC, var_cleanup_service, BLOCKING);
-    if (cleanup == 0)
-	return (0);
+    if (cleanup == 0) {
+	msg_warn("connect to %s/%s: %m",
+		 MAIL_CLASS_PUBLIC, var_cleanup_service);
+	FORWARD_OPEN_RETURN(0);
+    }
     close_on_exec(vstream_fileno(cleanup), CLOSE_ON_EXEC);
     if (attr_scan(cleanup, ATTR_FLAG_STRICT,
-		  ATTR_TYPE_STR, MAIL_ATTR_QUEUEID, buffer,
+		  RECV_ATTR_STR(MAIL_ATTR_QUEUEID, buffer),
 		  ATTR_TYPE_END) != 1) {
 	vstream_fclose(cleanup);
-	return (0);
+	FORWARD_OPEN_RETURN(0);
     }
     info = (FORWARD_INFO *) mymalloc(sizeof(FORWARD_INFO));
     info->cleanup = cleanup;
     info->queue_id = mystrdup(STR(buffer));
     GETTIMEOFDAY(&info->posting_time);
 
-#define FORWARD_CLEANUP_FLAGS (CLEANUP_FLAG_BOUNCE | CLEANUP_FLAG_MASK_INTERNAL)
+#define FORWARD_CLEANUP_FLAGS \
+	(CLEANUP_FLAG_BOUNCE | CLEANUP_FLAG_MASK_INTERNAL \
+	| smtputf8_autodetect(MAIL_SRC_MASK_FORWARD) \
+	| ((request->smtputf8 & SMTPUTF8_FLAG_REQUESTED) ? \
+	CLEANUP_FLAG_SMTPUTF8 : 0))
 
     attr_print(cleanup, ATTR_FLAG_NONE,
-	       ATTR_TYPE_INT, MAIL_ATTR_FLAGS, FORWARD_CLEANUP_FLAGS,
+	       SEND_ATTR_INT(MAIL_ATTR_FLAGS, FORWARD_CLEANUP_FLAGS),
 	       ATTR_TYPE_END);
 
     /*
@@ -190,8 +208,7 @@ static FORWARD_INFO *forward_open(DELIVER_REQUEST *request, const char *sender)
     PASS_ATTR(cleanup, MAIL_ATTR_LOG_IDENT, request->log_ident);
     PASS_ATTR(cleanup, MAIL_ATTR_RWR_CONTEXT, request->rewrite_context);
 
-    vstring_free(buffer);
-    return (info);
+    FORWARD_OPEN_RETURN(info);
 }
 
 /* forward_append - append recipient to message envelope */
@@ -216,12 +233,12 @@ int     forward_append(DELIVER_ATTR attr)
      */
     if ((table_snd = (HTABLE *) htable_find(forward_dt, attr.delivered)) == 0) {
 	table_snd = htable_create(0);
-	htable_enter(forward_dt, attr.delivered, (char *) table_snd);
+	htable_enter(forward_dt, attr.delivered, (void *) table_snd);
     }
     if ((info = (FORWARD_INFO *) htable_find(table_snd, attr.sender)) == 0) {
 	if ((info = forward_open(attr.request, attr.sender)) == 0)
 	    return (-1);
-	htable_enter(table_snd, attr.sender, (char *) info);
+	htable_enter(table_snd, attr.sender, (void *) info);
     }
 
     /*
@@ -249,6 +266,7 @@ static int forward_send(FORWARD_INFO *info, DELIVER_REQUEST *request,
 {
     const char *myname = "forward_send";
     VSTRING *buffer = vstring_alloc(100);
+    VSTRING *folded;
     int     status;
     int     rec_type = 0;
 
@@ -263,9 +281,12 @@ static int forward_send(FORWARD_INFO *info, DELIVER_REQUEST *request,
 		var_myhostname, var_mail_name);
     rec_fprintf(info->cleanup, REC_TYPE_NORM, "\tid %s; %s",
 		info->queue_id, mail_date(info->posting_time.tv_sec));
-    if (local_deliver_hdr_mask & DELIVER_HDR_FWD)
+    if (local_deliver_hdr_mask & DELIVER_HDR_FWD) {
+	folded = vstring_alloc(100);
 	rec_fprintf(info->cleanup, REC_TYPE_NORM, "Delivered-To: %s",
-		    lowercase(STR(buffer)));
+		    casefold(folded, (STR(buffer))));
+	vstring_free(folded);
+    }
     if ((status = vstream_ferror(info->cleanup)) == 0)
 	if (vstream_fseek(attr.fp, attr.offset, SEEK_SET) < 0)
 	    msg_fatal("%s: seek queue file %s: %m:",
@@ -296,7 +317,7 @@ static int forward_send(FORWARD_INFO *info, DELIVER_REQUEST *request,
     if (status == 0)
 	if (vstream_fflush(info->cleanup)
 	    || attr_scan(info->cleanup, ATTR_FLAG_MISSING,
-			 ATTR_TYPE_INT, MAIL_ATTR_STATUS, &status,
+			 RECV_ATTR_INT(MAIL_ATTR_STATUS, &status),
 			 ATTR_TYPE_END) != 1)
 	    status = 1;
 
@@ -359,13 +380,13 @@ int     forward_finish(DELIVER_REQUEST *request, DELIVER_ATTR attr, int cancel)
 			 delivered, sender, status);
 	    (void) vstream_fclose(info->cleanup);
 	    myfree(info->queue_id);
-	    myfree((char *) info);
+	    myfree((void *) info);
 	}
-	myfree((char *) sn_list);
-	htable_free(table_snd, (void (*) (char *)) 0);
+	myfree((void *) sn_list);
+	htable_free(table_snd, (void (*) (void *)) 0);
     }
-    myfree((char *) dt_list);
-    htable_free(forward_dt, (void (*) (char *)) 0);
+    myfree((void *) dt_list);
+    htable_free(forward_dt, (void (*) (void *)) 0);
     forward_dt = 0;
     return (status);
 }

@@ -31,7 +31,7 @@ typedef struct {
 #define EDIT_FILE_SUFFIX ".tmp"
 
 extern EDIT_FILE *edit_file_open(const char *, int, mode_t);
-extern int edit_file_close(EDIT_FILE *);
+extern int WARN_UNUSED_RESULT edit_file_close(EDIT_FILE *);
 extern void edit_file_cleanup(EDIT_FILE *);
 
 /* LICENSE
@@ -43,6 +43,11 @@ extern void edit_file_cleanup(EDIT_FILE *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

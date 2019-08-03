@@ -129,11 +129,6 @@
 /* .IP MIME_OPT_REPORT_NESTING
 /*	Report errors that set the MIME_ERR_NESTING error flag
 /*	(see above).
-/* .IP MIME_OPT_RECURSE_ALL_MESSAGE
-/*	Recurse into message/anything types other than message/rfc822.
-/*	This feature can detect "bad" information in headers of
-/*	message/partial and message/external-body types. It must
-/*	not be used with 8-bit -> 7-bit MIME transformations.
 /* .IP MIME_OPT_DOWNGRADE
 /*	Transform content that claims to be 8-bit into quoted-printable.
 /*	Where appropriate, update Content-Transfer-Encoding: message
@@ -242,6 +237,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -335,6 +335,7 @@ struct MIME_STATE {
 #define MIME_STYPE_RFC822	2
 #define MIME_STYPE_PARTIAL	3
 #define MIME_STYPE_EXTERN_BODY	4
+#define MIME_STYPE_GLOBAL	5
 
  /*
   * MIME parser states. We steal from the public interface.
@@ -484,7 +485,7 @@ static void mime_state_pop(MIME_STATE *state)
     state->nesting_level -= 1;
     state->stack = stack->next;
     myfree(stack->boundary);
-    myfree((char *) stack);
+    myfree((void *) stack);
 }
 
 /* mime_state_alloc - create MIME state machine */
@@ -511,6 +512,7 @@ MIME_STATE *mime_state_alloc(int flags,
     state->prev_rec_type = 0;
     state->stack = 0;
     state->token_buffer = vstring_alloc(1);
+    state->nesting_level = -1;			/* BC Fix 20170512 */
 
     /* Static members. */
     state->static_flags = flags;
@@ -532,7 +534,7 @@ MIME_STATE *mime_state_free(MIME_STATE *state)
 	mime_state_pop(state);
     if (state->token_buffer)
 	vstring_free(state->token_buffer);
-    myfree((char *) state);
+    myfree((void *) state);
     return (0);
 }
 
@@ -591,6 +593,8 @@ static void mime_state_content_type(MIME_STATE *state,
 		    state->curr_stype = MIME_STYPE_PARTIAL;
 		else if (TOKEN_MATCH(state->token[2], "external-body"))
 		    state->curr_stype = MIME_STYPE_EXTERN_BODY;
+		else if (TOKEN_MATCH(state->token[2], "global"))
+		    state->curr_stype = MIME_STYPE_GLOBAL;
 	    }
 	    return;
 	}
@@ -895,7 +899,8 @@ int     mime_state_update(MIME_STATE *state, int rec_type,
 	 */
 	if ((state->static_flags & MIME_OPT_DOWNGRADE)
 	    && state->curr_domain != MIME_ENC_7BIT) {
-	    if (state->curr_ctype == MIME_CTYPE_MESSAGE
+	    if ((state->curr_ctype == MIME_CTYPE_MESSAGE
+		 && state->curr_stype != MIME_STYPE_GLOBAL)
 		|| state->curr_ctype == MIME_CTYPE_MULTIPART)
 		cp = CU_CHAR_PTR("7bit");
 	    else
@@ -941,7 +946,7 @@ int     mime_state_update(MIME_STATE *state, int rec_type,
 
 	/*
 	 * Find out if the next body starts with its own message headers. In
-	 * agressive mode, examine headers of partial and external-body
+	 * aggressive mode, examine headers of partial and external-body
 	 * messages. Otherwise, treat such headers as part of the "body". Set
 	 * the proper encoding information for the multipart prolog.
 	 * 
@@ -963,8 +968,14 @@ int     mime_state_update(MIME_STATE *state, int rec_type,
 	    if (len == 0) {
 		state->body_offset = 0;		/* XXX */
 		if (state->curr_ctype == MIME_CTYPE_MESSAGE) {
-		    if (state->curr_stype == MIME_STYPE_RFC822
-		    || (state->static_flags & MIME_OPT_RECURSE_ALL_MESSAGE))
+		    if (state->curr_stype == MIME_STYPE_RFC822)
+			SET_MIME_STATE(state, MIME_STATE_NESTED,
+				       MIME_CTYPE_TEXT, MIME_STYPE_PLAIN,
+				       MIME_ENC_7BIT, MIME_ENC_7BIT);
+		    else if (state->curr_stype == MIME_STYPE_GLOBAL
+			 && ((state->static_flags & MIME_OPT_DOWNGRADE) == 0
+			     || state->curr_domain == MIME_ENC_7BIT))
+			/* XXX EAI: inspect encoded message/global. */
 			SET_MIME_STATE(state, MIME_STATE_NESTED,
 				       MIME_CTYPE_TEXT, MIME_STYPE_PLAIN,
 				       MIME_ENC_7BIT, MIME_ENC_7BIT);
@@ -1038,7 +1049,7 @@ int     mime_state_update(MIME_STATE *state, int rec_type,
 
 	/*
 	 * Body text. Look for message boundaries, and recover from missing
-	 * boundary strings. Missing boundaries can happen in agressive mode
+	 * boundary strings. Missing boundaries can happen in aggressive mode
 	 * with text/rfc822-headers or with message/partial. Ignore non-space
 	 * cruft after --boundary or --boundary--, because some MUAs do, and
 	 * because only perverse software would take advantage of this to
@@ -1224,6 +1235,7 @@ static void err_print(void *unused_context, int err_flag,
 int     var_header_limit = 2000;
 int     var_mime_maxdepth = 20;
 int     var_mime_bound_len = 2000;
+char   *var_drop_hdrs = DEF_DROP_HDRS;
 
 int     main(int unused_argc, char **argv)
 {

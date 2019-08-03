@@ -123,6 +123,7 @@ DNS_RR *dns_rr_create(const char *qname, const char *rname,
     rr->type = type;
     rr->class = class;
     rr->ttl = ttl;
+    rr->dnssec_valid = 0;
     rr->pref = pref;
     if (data && data_len > 0)
 	memcpy(rr->data, data, data_len);
@@ -140,7 +141,7 @@ void    dns_rr_free(DNS_RR *rr)
 	    dns_rr_free(rr->next);
 	myfree(rr->qname);
 	myfree(rr->rname);
-	myfree((char *) rr);
+	myfree((void *) rr);
     }
 }
 
@@ -155,7 +156,7 @@ DNS_RR *dns_rr_copy(DNS_RR *src)
      * Combine struct assignment and data copy in one block copy operation.
      */
     dst = (DNS_RR *) mymalloc(len);
-    memcpy((char *) dst, (char *) src, len);
+    memcpy((void *) dst, (void *) src, len);
     dst->qname = mystrdup(src->qname);
     dst->rname = mystrdup(src->rname);
     dst->next = 0;
@@ -264,7 +265,7 @@ DNS_RR *dns_rr_sort(DNS_RR *list, int (*compar) (DNS_RR *, DNS_RR *))
     /*
      * Sort by user-specified criterion.
      */
-    qsort((char *) rr_array, len, sizeof(*rr_array), dns_rr_sort_callback);
+    qsort((void *) rr_array, len, sizeof(*rr_array), dns_rr_sort_callback);
 
     /*
      * Fix the links.
@@ -277,7 +278,7 @@ DNS_RR *dns_rr_sort(DNS_RR *list, int (*compar) (DNS_RR *, DNS_RR *))
     /*
      * Cleanup.
      */
-    myfree((char *) rr_array);
+    myfree((void *) rr_array);
     dns_rr_sort_user = saved_user;
     return (list);
 }
@@ -302,10 +303,12 @@ DNS_RR *dns_rr_shuffle(DNS_RR *list)
 	rr_array[len] = rr;
 
     /*
-     * Shuffle resource records.
+     * Shuffle resource records. Every element has an equal chance of landing
+     * in slot 0.  After that every remaining element has an equal chance of
+     * landing in slot 1, ...  This is exactly n! states for n! permutations.
      */
-    for (i = 0; i < len; i++) {
-	r = myrand() % len;
+    for (i = 0; i < len - 1; i++) {
+	r = i + (myrand() % (len - i));		/* Victor&Son */
 	rr = rr_array[i];
 	rr_array[i] = rr_array[r];
 	rr_array[r] = rr;
@@ -322,7 +325,7 @@ DNS_RR *dns_rr_shuffle(DNS_RR *list)
     /*
      * Cleanup.
      */
-    myfree((char *) rr_array);
+    myfree((void *) rr_array);
     return (list);
 }
 

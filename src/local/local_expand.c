@@ -110,9 +110,10 @@ typedef struct {
 
 /* local_expand_lookup - mac_expand() lookup routine */
 
-static const char *local_expand_lookup(const char *name, int mode, char *ptr)
+static const char *local_expand_lookup(const char *name, int mode, void *ptr)
 {
     LOCAL_EXP *local = (LOCAL_EXP *) ptr;
+    static char rcpt_delim[2];
 
 #define STREQ(x,y) (*(x) == *(y) && strcmp((x), (y)) == 0)
 
@@ -135,7 +136,10 @@ static const char *local_expand_lookup(const char *name, int mode, char *ptr)
 	    local->status |= LOCAL_EXP_EXTENSION_MATCHED;
 	return (local->state->msg_attr.extension);
     } else if (STREQ(name, "recipient_delimiter")) {
-	return (*var_rcpt_delim ? var_rcpt_delim : 0);
+	rcpt_delim[0] =
+	    local->state->msg_attr.local[strlen(local->state->msg_attr.user)];
+	rcpt_delim[1] = 0;
+	return (rcpt_delim[0] ? rcpt_delim : 0);
 #if 0
     } else if (STREQ(name, "client_hostname")) {
 	return (local->state->msg_attr.request->client_name);
@@ -169,6 +173,6 @@ int     local_expand(VSTRING *result, const char *pattern,
     local.usr_attr = usr_attr;
     local.status = 0;
     expand_status = mac_expand(result, pattern, MAC_EXP_FLAG_NONE,
-			       filter, local_expand_lookup, (char *) &local);
+			       filter, local_expand_lookup, (void *) &local);
     return (local.status | expand_status);
 }

@@ -116,7 +116,7 @@ List of additional src files compared to Postfix normal version:
 List of modified src files compared to Postfix normal version:
 - global/Makefile.in
 - global/mail_dict.c
-- master.c
+- master/master.c
 
 Implementing new features
 =========================

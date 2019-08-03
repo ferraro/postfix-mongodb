@@ -19,6 +19,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -36,45 +41,26 @@
 #include <mymalloc.h>
 #include <argv.h>
 
+/* Global library. */
+
+#include <mail_params.h>
+
 /* Application-specific. */
 
 #include "dns.h"
 
-static void print_rr(DNS_RR *rr)
+static void print_rr(VSTRING *buf, DNS_RR *rr)
 {
-    MAI_HOSTADDR_STR host;
-
     while (rr) {
-	printf("%s: ttl: %9d ", rr->rname, rr->ttl);
-	switch (rr->type) {
-	case T_A:
-#ifdef T_AAAA
-	case T_AAAA:
-#endif
-	    if (dns_rr_to_pa(rr, &host) == 0)
-		msg_fatal("conversion error for resource record type %s: %m",
-			  dns_strtype(rr->type));
-	    printf("%s: %s\n", dns_strtype(rr->type), host.buf);
-	    break;
-	case T_CNAME:
-	case T_MB:
-	case T_MG:
-	case T_MR:
-	case T_NS:
-	case T_PTR:
-	case T_TXT:
-	    printf("%s: %s\n", dns_strtype(rr->type), rr->data);
-	    break;
-	case T_MX:
-	    printf("pref: %d %s: %s\n",
-		   rr->pref, dns_strtype(rr->type), rr->data);
-	    break;
-	default:
-	    msg_fatal("print_rr: don't know how to print type %s",
-		      dns_strtype(rr->type));
-	}
+	vstream_printf("ad: %u, rr: %s\n",
+		       rr->dnssec_valid, dns_strrecord(buf, rr));
 	rr = rr->next;
     }
+}
+
+static NORETURN usage(char **argv)
+{
+    msg_fatal("usage: %s [-npv] [-f filter] types name", argv[0]);
 }
 
 int     main(int argc, char **argv)
@@ -84,30 +70,57 @@ int     main(int argc, char **argv)
     char   *name;
     VSTRING *fqdn = vstring_alloc(100);
     VSTRING *why = vstring_alloc(100);
+    VSTRING *buf;
+    int     rcode;
     DNS_RR *rr;
     int     i;
+    int     ch;
+    int     lflags = DNS_REQ_FLAG_NONE;
 
     msg_vstream_init(argv[0], VSTREAM_ERR);
-    if (argc != 3)
-	msg_fatal("usage: %s types name", argv[0]);
-    types_argv = argv_split(argv[1], ", \t\r\n");
+    while ((ch = GETOPT(argc, argv, "f:npv")) > 0) {
+	switch (ch) {
+	case 'v':
+	    msg_verbose++;
+	    break;
+	case 'f':
+	    dns_rr_filter_compile("DNS reply filter", optarg);
+	    break;
+	case 'n':
+	    lflags |= DNS_REQ_FLAG_NCACHE_TTL;
+	    break;
+	case 'p':
+	    var_dns_ncache_ttl_fix = 1;
+	    break;
+	default:
+	    usage(argv);
+	}
+    }
+    if (argc != optind + 2)
+	usage(argv);
+    types_argv = argv_split(argv[optind], CHARS_COMMA_SP);
     types = (unsigned *) mymalloc(sizeof(*types) * (types_argv->argc + 1));
     for (i = 0; i < types_argv->argc; i++)
 	if ((types[i] = dns_type(types_argv->argv[i])) == 0)
 	    msg_fatal("invalid query type: %s", types_argv->argv[i]);
     types[i] = 0;
     argv_free(types_argv);
-    name = argv[2];
+    name = argv[optind + 1];
     msg_verbose = 1;
-    switch (dns_lookup_v(name, RES_DEBUG, &rr, fqdn, why,
-			 DNS_REQ_FLAG_NONE, types)) {
+    switch (dns_lookup_rv(name, RES_USE_DNSSEC, &rr, fqdn, why,
+			  &rcode, lflags, types)) {
     default:
-	msg_fatal("%s", vstring_str(why));
+	msg_warn("%s (rcode=%d)", vstring_str(why), rcode);
     case DNS_OK:
-	printf("%s: fqdn: %s\n", name, vstring_str(fqdn));
-	print_rr(rr);
-	dns_rr_free(rr);
+	if (rr) {
+	    vstream_printf("%s: fqdn: %s\n", name, vstring_str(fqdn));
+	    buf = vstring_alloc(100);
+	    print_rr(buf, rr);
+	    dns_rr_free(rr);
+	    vstring_free(buf);
+	    vstream_fflush(VSTREAM_OUT);
+	}
     }
-    myfree((char *) types);
+    myfree((void *) types);
     exit(0);
 }

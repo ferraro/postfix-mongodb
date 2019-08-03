@@ -1,8 +1,6 @@
  /*
-  * Proof-of-concept test program. Create, update or read a database. When
-  * the input is a name=value pair, the database is updated, otherwise the
-  * program assumes that the input specifies a lookup key and prints the
-  * corresponding value.
+  * Proof-of-concept test program. Create, update or read a database. Type
+  * '?' for a list of commands.
   */
 
 /* System library. */
@@ -14,6 +12,10 @@
 #include <signal.h>
 #include <string.h>
 
+#ifdef STRCASECMP_IN_STRINGS_H
+#include <strings.h>
+#endif
+
 /* Utility library. */
 
 #include <msg.h>
@@ -23,10 +25,12 @@
 #include <msg_vstream.h>
 #include <vstring_vstream.h>
 #include <dict.h>
+#include <dict_lmdb.h>
+#include <dict_db.h>
 
 static NORETURN usage(char *myname)
 {
-    msg_fatal("usage: %s type:file read|write|create [fold] [sync]", myname);
+    msg_fatal("usage: %s type:file read|write|create [flags...]", myname);
 }
 
 void    dict_test(int argc, char **argv)
@@ -41,9 +45,11 @@ void    dict_test(int argc, char **argv)
     const char *key;
     const char *value;
     int     ch;
-    int     dict_flags = DICT_FLAG_LOCK | DICT_FLAG_DUP_REPLACE;
+    int     dict_flags = 0;
     int     n;
     int     rc;
+
+#define USAGE	"verbose|del key|get key|put key=value|first|next|masks|flags"
 
     signal(SIGPIPE, SIG_IGN);
 
@@ -68,18 +74,26 @@ void    dict_test(int argc, char **argv)
 	open_flags = O_RDONLY;
     else
 	msg_fatal("unknown access mode: %s", argv[2]);
-    for (n = 2; argv[optind + n]; n++) {
-	if (strcasecmp(argv[optind + 2], "fold") == 0)
-	    dict_flags |= DICT_FLAG_FOLD_ANY;
-	else if (strcasecmp(argv[optind + 2], "sync") == 0)
-	    dict_flags |= DICT_FLAG_SYNC_UPDATE;
-	else
-	    usage(argv[0]);
-    }
+    for (n = 2; argv[optind + n]; n++)
+	dict_flags |= dict_flags_mask(argv[optind + 2]);
+    if ((dict_flags & DICT_FLAG_OPEN_LOCK) == 0)
+	dict_flags |= DICT_FLAG_LOCK;
+    if ((dict_flags & (DICT_FLAG_DUP_WARN | DICT_FLAG_DUP_IGNORE)) == 0)
+	dict_flags |= DICT_FLAG_DUP_REPLACE;
+    dict_flags |= DICT_FLAG_UTF8_REQUEST;
+    vstream_fflush(VSTREAM_OUT);
     dict_name = argv[optind];
     dict_allow_surrogate = 1;
+    util_utf8_enable = 1;
     dict = dict_open(dict_name, open_flags, dict_flags);
     dict_register(dict_name, dict);
+    vstream_printf("owner=%s (uid=%ld)\n",
+		   dict->owner.status == DICT_OWNER_TRUSTED ? "trusted" :
+		   dict->owner.status == DICT_OWNER_UNTRUSTED ? "untrusted" :
+		   dict->owner.status == DICT_OWNER_UNKNOWN ? "unspecified" :
+		   "error", (long) dict->owner.uid);
+    vstream_fflush(VSTREAM_OUT);
+
     while (vstring_fgets_nonl(inbuf, VSTREAM_IN)) {
 	bufp = vstring_str(inbuf);
 	if (!isatty(0)) {
@@ -89,7 +103,7 @@ void    dict_test(int argc, char **argv)
 	if (*bufp == '#')
 	    continue;
 	if ((cmd = mystrtok(&bufp, " ")) == 0) {
-	    vstream_printf("usage: verbose|del key|get key|put key=value|first|next|masks|flags\n");
+	    vstream_printf("usage: %s\n", USAGE);
 	    vstream_fflush(VSTREAM_OUT);
 	    continue;
 	}
@@ -117,8 +131,6 @@ void    dict_test(int argc, char **argv)
 	    if (dict_put(dict, key, value) != 0)
 		vstream_printf("%s: %s\n", key, dict->error ?
 			       "error" : "not updated");
-	    else
-		vstream_printf("%s=%s\n", key, value);
 	} else if (strcmp(cmd, "first") == 0 && !key && !value) {
 	    if (dict_seq(dict, DICT_SEQ_FUN_FIRST, &key, &value) == 0)
 		vstream_printf("%s=%s\n", key, value);
@@ -144,7 +156,7 @@ void    dict_test(int argc, char **argv)
 	    vstream_printf("DICT_FLAG_INST_MASK %s\n",
 			   dict_flags_str(DICT_FLAG_INST_MASK));
 	} else {
-	    vstream_printf("usage: del key|get key|put key=value|first|next|masks|flags\n");
+	    vstream_printf("usage: %s\n", USAGE);
 	}
 	vstream_fflush(VSTREAM_OUT);
     }

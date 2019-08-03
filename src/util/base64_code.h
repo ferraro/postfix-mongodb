@@ -19,8 +19,16 @@
  /*
   * External interface.
   */
-extern VSTRING *base64_encode(VSTRING *, const char *, ssize_t);
-extern VSTRING *base64_decode(VSTRING *, const char *, ssize_t);
+extern VSTRING *base64_encode_opt(VSTRING *, const char *, ssize_t, int);
+extern VSTRING *WARN_UNUSED_RESULT base64_decode_opt(VSTRING *, const char *, ssize_t, int);
+
+#define BASE64_FLAG_NONE	0
+#define BASE64_FLAG_APPEND	(1<<0)
+
+#define base64_encode(bp, cp, ln) \
+	base64_encode_opt((bp), (cp), (ln), BASE64_FLAG_NONE)
+#define base64_decode(bp, cp, ln) \
+	base64_decode_opt((bp), (cp), (ln), BASE64_FLAG_NONE)
 
 /* LICENSE
 /* .ad
@@ -31,6 +39,11 @@ extern VSTRING *base64_decode(VSTRING *, const char *, ssize_t);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif
