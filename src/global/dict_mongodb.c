@@ -143,7 +143,6 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 	}
 
 	query = bson_new();
-    BSON_APPEND_UTF8 (query, "hello", "world");
 	if (plus_name == NULL) {
         BSON_APPEND_UTF8(query, dict_mongodb->key, name);
 	} else {
