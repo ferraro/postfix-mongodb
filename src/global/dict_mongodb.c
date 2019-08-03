@@ -74,7 +74,7 @@
 typedef struct {
     DICT			    dict;               /* parent class */
     CFG_PARSER		    *parser;		    /* common parameter parser */
-    char			    *uri;			    /* URI like mongodb://localhost:27017 */
+    char			    *uri;			    /* URI like mongodb://127.0.0.1:27017 (use IP address!!!) */
 	char			    *dbname;		    /* database name */
 	char			    *collection;	    /* collection name */
 	char			    *key;			    /* key */

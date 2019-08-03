@@ -30,8 +30,9 @@ Example of a /etc/postfix/mmongodb-aliases.cf file:
 	# (C) Stephan Ferraro <stephan@ferraro.net>, Ferraro Ltd.
 	#
 
-	# URI
-	uri = mongodb://root:root@localhost:27017/?appname=postfix
+	# URI (use IP address, no hostnames. Postfix can't resolve them, only postmap can do it.
+	# So for localhost, use 127.0.0.1.
+	uri = mongodb://root:root@127.0.0.1:27017/?appname=postfix
 
 	# The database name on the servers.
 	dbname = test
@@ -110,6 +111,11 @@ List of modified src files compared to Postfix normal version:
 - global/Makefile.in
 - global/mail_dict.c
 - master/master.c
+
+Hostnames
+=========
+For some reasons, Postfix or Libmongoc does not support hostnames in the URI parameter while running.
+Only in test mode with postmap it works. If someone knows why, feel free to make a pull request.  
 
 Implementing new features
 =========================
