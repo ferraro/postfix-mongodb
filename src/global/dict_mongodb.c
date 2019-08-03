@@ -163,7 +163,9 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
             found = strdup(plus_name);
         }
         // virtual agent needs the name without @domainname so convert foo@bar.tld to foo.
-        found[strchr(found, '@')] = 0;
+        char *foundStrPtr = strchr(found, '@');
+
+        *foundStrPtr = 0; // Terminate String at '@' character
     }
 
     bson_destroy(query);
