@@ -64,7 +64,7 @@
 /*	List of domains the queries should be restricted to.  If
 /*	specified, only FQDN addresses whose domain parts matching this
 /*	list will be queried against the SQL database.  Lookups for
-/*	partial addresses are also supressed.  This can significantly
+/*	partial addresses are also suppressed.  This can significantly
 /*	reduce the query load on the server.
 /* .IP result_format
 /*	The format used to expand results from queries.  Substitutions
@@ -115,7 +115,7 @@
 /* .br
 /*	where_field = alias
 /* .br
-/*	hosts = host1.some.domain\fR \fBhost2.some.domain
+/*	hosts = host1.some.domain host2.some.domain
 /* .PP
 /* SEE ALSO
 /*	dict(3) generic dictionary manager
@@ -160,7 +160,6 @@
 #include "argv.h"
 #include "vstring.h"
 #include "split_at.h"
-#include "find_inet.h"
 #include "myrand.h"
 #include "events.h"
 #include "stringops.h"
@@ -180,6 +179,7 @@
 
 #define TYPEUNIX			(1<<0)
 #define TYPEINET			(1<<1)
+#define TYPECONNSTRING			(1<<2)
 
 #define RETRY_CONN_MAX			100
 #define RETRY_CONN_INTV			60	/* 1 minute */
@@ -190,7 +190,7 @@ typedef struct {
     char   *hostname;
     char   *name;
     char   *port;
-    unsigned type;			/* TYPEUNIX | TYPEINET */
+    unsigned type;			/* TYPEUNIX | TYPEINET | TYPECONNSTRING */
     unsigned stat;			/* STATUNTRIED | STATFAIL | STATCUR */
     time_t  ts;				/* used for attempting reconnection */
 } HOST;
@@ -241,7 +241,7 @@ static void dict_pgsql_quote(DICT *dict, const char *name, VSTRING *result)
     HOST   *active_host = dict_pgsql->active_host;
     char   *myname = "dict_pgsql_quote";
     size_t  len = strlen(name);
-    size_t  buflen = 2 * len + 1;
+    size_t  buflen;
     int     err = 1;
 
     if (active_host == 0)
@@ -251,9 +251,11 @@ static void dict_pgsql_quote(DICT *dict, const char *name, VSTRING *result)
      * We won't get arithmetic overflows in 2*len + 1, because Postfix input
      * keys have reasonable size limits, better safe than sorry.
      */
-    if (buflen <= len)
-	msg_panic("%s: arithmetic overflow in 2*%lu+1",
-		  myname, (unsigned long) len);
+    if (len > (SSIZE_T_MAX - VSTRING_LEN(result) - 1) / 2)
+	msg_panic("%s: arithmetic overflow in %lu+2*%lu+1",
+		  myname, (unsigned long) VSTRING_LEN(result),
+		  (unsigned long) len);
+    buflen = 2 * len + 1;
 
     /*
      * XXX Workaround: stop further processing when PQescapeStringConn()
@@ -319,7 +321,6 @@ static const char *dict_pgsql_lookup(DICT *dict, const char *name)
     const char *myname = "dict_pgsql_lookup";
     PGSQL_RES *query_res;
     DICT_PGSQL *dict_pgsql;
-    PLPGSQL *pldb;
     static VSTRING *query;
     static VSTRING *result;
     int     i;
@@ -331,7 +332,6 @@ static const char *dict_pgsql_lookup(DICT *dict, const char *name)
     int     domain_rc;
 
     dict_pgsql = (DICT_PGSQL *) dict;
-    pldb = dict_pgsql->pldb;
 
 #define INIT_VSTR(buf, len) do { \
 	if (buf == 0) \
@@ -344,6 +344,19 @@ static const char *dict_pgsql_lookup(DICT *dict, const char *name)
     INIT_VSTR(result, 10);
 
     dict->error = 0;
+
+    /*
+     * Don't frustrate future attempts to make Postfix UTF-8 transparent.
+     */
+#ifdef SNAPSHOT
+    if ((dict->flags & DICT_FLAG_UTF8_ACTIVE) == 0
+	&& !valid_utf8_string(name, strlen(name))) {
+	if (msg_verbose)
+	    msg_info("%s: %s: Skipping lookup of non-UTF-8 key '%s'",
+		     myname, dict_pgsql->parser->name, name);
+	return (0);
+    }
+#endif
 
     /*
      * Optionally fold the key.
@@ -469,7 +482,8 @@ static HOST *dict_pgsql_get_active(PLPGSQL *PLDB, char *dbname,
 
     /* try the active connections first; prefer the ones to UNIX sockets */
     if ((host = dict_pgsql_find_host(PLDB, STATACTIVE, TYPEUNIX)) != NULL ||
-	(host = dict_pgsql_find_host(PLDB, STATACTIVE, TYPEINET)) != NULL) {
+	(host = dict_pgsql_find_host(PLDB, STATACTIVE, TYPEINET)) != NULL ||
+	(host = dict_pgsql_find_host(PLDB, STATACTIVE, TYPECONNSTRING)) != NULL) {
 	if (msg_verbose)
 	    msg_info("%s: found active connection to host %s", myname,
 		     host->hostname);
@@ -485,7 +499,9 @@ static HOST *dict_pgsql_get_active(PLPGSQL *PLDB, char *dbname,
 	   ((host = dict_pgsql_find_host(PLDB, STATUNTRIED | STATFAIL,
 					 TYPEUNIX)) != NULL ||
 	    (host = dict_pgsql_find_host(PLDB, STATUNTRIED | STATFAIL,
-					 TYPEINET)) != NULL)) {
+					 TYPEINET)) != NULL ||
+	    (host = dict_pgsql_find_host(PLDB, STATUNTRIED | STATFAIL,
+					 TYPECONNSTRING)) != NULL)) {
 	if (msg_verbose)
 	    msg_info("%s: attempting to connect to host %s", myname,
 		     host->hostname);
@@ -500,7 +516,7 @@ static HOST *dict_pgsql_get_active(PLPGSQL *PLDB, char *dbname,
 
 /* dict_pgsql_event - callback: close idle connections */
 
-static void dict_pgsql_event(int unused_event, char *context)
+static void dict_pgsql_event(int unused_event, void *context)
 {
     HOST   *host = (HOST *) context;
 
@@ -579,7 +595,7 @@ static PGSQL_RES *plpgsql_query(DICT_PGSQL *dict_pgsql,
 		if (msg_verbose)
 		    msg_info("dict_pgsql: successful query from host %s",
 			     host->hostname);
-		event_request_timer(dict_pgsql_event, (char *) host,
+		event_request_timer(dict_pgsql_event, (void *) host,
 				    IDLE_CONN_INTV);
 		return (res);
 	    case PGRES_FATAL_ERROR:
@@ -624,9 +640,13 @@ static PGSQL_RES *plpgsql_query(DICT_PGSQL *dict_pgsql,
  */
 static void plpgsql_connect_single(HOST *host, char *dbname, char *username, char *password)
 {
-    if ((host->db = PQsetdbLogin(host->name, host->port, NULL, NULL,
-				 dbname, username, password)) == NULL
-	|| PQstatus(host->db) != CONNECTION_OK) {
+    if (host->type == TYPECONNSTRING) {
+	host->db = PQconnectdb(host->name);
+    } else {
+	host->db = PQsetdbLogin(host->name, host->port, NULL, NULL,
+				dbname, username, password);
+    }
+    if (host->db == NULL || PQstatus(host->db) != CONNECTION_OK) {
 	msg_warn("connect to pgsql server %s: %s",
 		 host->hostname, PQerrorMessage(host->db));
 	plpgsql_down_host(host);
@@ -635,6 +655,18 @@ static void plpgsql_connect_single(HOST *host, char *dbname, char *username, cha
     if (msg_verbose)
 	msg_info("dict_pgsql: successful connection to host %s",
 		 host->hostname);
+
+    /*
+     * The only legitimate encodings for Internet mail are ASCII and UTF-8.
+     */
+#ifdef SNAPSHOT
+    if (PQsetClientEncoding(host->db, "UTF8") != 0) {
+	msg_warn("dict_pgsql: cannot set the encoding to UTF8, skipping %s",
+		 host->hostname);
+	plpgsql_down_host(host);
+	return;
+    }
+#else
 
     /*
      * XXX Postfix does not send multi-byte characters. The following piece
@@ -647,6 +679,7 @@ static void plpgsql_connect_single(HOST *host, char *dbname, char *username, cha
 	plpgsql_down_host(host);
 	return;
     }
+#endif
     /* Success. */
     host->stat = STATACTIVE;
 }
@@ -672,7 +705,7 @@ static void plpgsql_down_host(HOST *host)
     host->db = 0;
     host->ts = time((time_t *) 0) + RETRY_CONN_INTV;
     host->stat = STATFAIL;
-    event_cancel_timer(dict_pgsql_event, (char *) host);
+    event_cancel_timer(dict_pgsql_event, (void *) host);
 }
 
 /* pgsql_parse_config - parse pgsql configuration file */
@@ -735,7 +768,7 @@ static void pgsql_parse_config(DICT_PGSQL *dict_pgsql, const char *pgsqlcf)
 
     hosts = cfg_get_str(p, "hosts", "", 0, 0);
 
-    dict_pgsql->hosts = argv_split(hosts, " ,\t\r\n");
+    dict_pgsql->hosts = argv_split(hosts, CHARS_COMMA_SP);
     if (dict_pgsql->hosts->argc == 0) {
 	argv_add(dict_pgsql->hosts, "localhost", ARGV_END);
 	argv_terminate(dict_pgsql->hosts);
@@ -778,12 +811,12 @@ DICT   *dict_pgsql_open(const char *name, int open_flags, int dict_flags)
     dict_pgsql->active_host = 0;
     dict_pgsql->pldb = plpgsql_init(dict_pgsql->hosts);
     if (dict_pgsql->pldb == NULL)
-	msg_fatal("couldn't intialize pldb!\n");
+	msg_fatal("couldn't initialize pldb!\n");
     dict_pgsql->dict.owner = cfg_get_owner(dict_pgsql->parser);
     return (DICT_DEBUG (&dict_pgsql->dict));
 }
 
-/* plpgsql_init - initalize a PGSQL database */
+/* plpgsql_init - initialize a PGSQL database */
 
 static PLPGSQL *plpgsql_init(ARGV *hosts)
 {
@@ -814,24 +847,37 @@ static HOST *host_init(const char *hostname)
     host->ts = 0;
 
     /*
-     * Ad-hoc parsing code. Expect "unix:pathname" or "inet:host:port", where
-     * both "inet:" and ":port" are optional.
+     * Modern syntax: "postgresql://connection-info".
      */
-    if (strncmp(d, "unix:", 5) == 0 || strncmp(d, "inet:", 5) == 0)
-	d += 5;
-    host->name = mystrdup(d);
-    host->port = split_at_right(host->name, ':');
+    if (strncmp(d, "postgresql:", 11) == 0) {
+	host->type = TYPECONNSTRING;
+	host->name = mystrdup(d);
+	host->port = 0;
+    }
 
-    /* This is how PgSQL distinguishes between UNIX and INET: */
-    if (host->name[0] && host->name[0] != '/')
-	host->type = TYPEINET;
-    else
-	host->type = TYPEUNIX;
-
+    /*
+     * Historical syntax: "unix:/pathname" and "inet:host:port". Strip the
+     * "unix:" and "inet:" prefixes. Look at the first character, which is
+     * how PgSQL historically distinguishes between UNIX and INET.
+     */
+    else {
+	if (strncmp(d, "unix:", 5) == 0 || strncmp(d, "inet:", 5) == 0)
+	    d += 5;
+	host->name = mystrdup(d);
+	if (host->name[0] && host->name[0] != '/') {
+	    host->type = TYPEINET;
+	    host->port = split_at_right(host->name, ':');
+	} else {
+	    host->type = TYPEUNIX;
+	    host->port = 0;
+	}
+    }
     if (msg_verbose > 1)
 	msg_info("%s: host=%s, port=%s, type=%s", myname, host->name,
 		 host->port ? host->port : "",
-		 host->type == TYPEUNIX ? "unix" : "inet");
+		 host->type == TYPEUNIX ? "unix" :
+		 host->type == TYPEINET ? "inet" :
+		 "uri");
     return host;
 }
 
@@ -864,15 +910,15 @@ static void plpgsql_dealloc(PLPGSQL *PLDB)
     int     i;
 
     for (i = 0; i < PLDB->len_hosts; i++) {
-	event_cancel_timer(dict_pgsql_event, (char *) (PLDB->db_hosts[i]));
+	event_cancel_timer(dict_pgsql_event, (void *) (PLDB->db_hosts[i]));
 	if (PLDB->db_hosts[i]->db)
 	    PQfinish(PLDB->db_hosts[i]->db);
 	myfree(PLDB->db_hosts[i]->hostname);
 	myfree(PLDB->db_hosts[i]->name);
-	myfree((char *) PLDB->db_hosts[i]);
+	myfree((void *) PLDB->db_hosts[i]);
     }
-    myfree((char *) PLDB->db_hosts);
-    myfree((char *) (PLDB));
+    myfree((void *) PLDB->db_hosts);
+    myfree((void *) (PLDB));
 }
 
 #endif

@@ -7,7 +7,7 @@
 /* .fi
 /* .ad
 /*	\fBpostlog\fR [\fB-iv\fR] [\fB-c \fIconfig_dir\fR]
-/*	[\fB-p \fIpriority\fB] [\fB-t \fItag\fR] [\fItext...\fR]
+/*	[\fB-p \fIpriority\fR] [\fB-t \fItag\fR] [\fItext...\fR]
 /* DESCRIPTION
 /*	The \fBpostlog\fR(1) command implements a Postfix-compatible logging
 /*	interface for use in, for example, shell scripts.
@@ -17,18 +17,24 @@
 /*	line, \fBpostlog\fR(1) reads from standard input and logs each input
 /*	line as one record.
 /*
-/*	Logging is sent to \fBsyslogd\fR(8); when the standard error stream
-/*	is connected to a terminal, logging is sent there as well.
+/*	By default, logging is sent to \fBsyslogd\fR(8) or
+/*	\fBpostlogd\fR(8); when the
+/*	standard error stream is connected to a terminal, logging
+/*	is sent there as well.
 /*
 /*	The following options are implemented:
 /* .IP "\fB-c \fIconfig_dir\fR"
 /*	Read the \fBmain.cf\fR configuration file in the named directory
 /*	instead of the default configuration directory.
-/* .IP \fB-i\fR
-/*	Include the process ID in the logging tag.
-/* .IP "\fB-p \fIpriority\fR"
-/*	Specifies the logging severity: \fBinfo\fR (default), \fBwarn\fR,
-/*	\fBerror\fR, \fBfatal\fR, or \fBpanic\fR.
+/* .IP "\fB-i\fR (obsolete)"
+/*	Include the process ID in the logging tag. This flag is ignored as
+/*	of Postfix 3.4, where the PID is always included.
+/* .IP "\fB-p \fIpriority\fR (default: \fBinfo\fR)"
+/*	Specifies the logging severity: \fBinfo\fR, \fBwarn\fR,
+/*	\fBerror\fR, \fBfatal\fR, or \fBpanic\fR. With Postfix 3.1
+/*	and later, the program will pause for 1 second after reporting
+/*	a \fBfatal\fR or \fBpanic\fR condition, just like other
+/*	Postfix programs.
 /* .IP "\fB-t \fItag\fR"
 /*	Specifies the logging tag, that is, the identifying name that
 /*	appears at the beginning of each logging record. A default tag
@@ -52,14 +58,26 @@
 /* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
 /*	The default location of the Postfix main.cf and master.cf
 /*	configuration files.
+/* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix 3.4 and later:
+/* .IP "\fBmaillog_file (empty)\fR"
+/*	The name of an optional logfile that is written by the Postfix
+/*	\fBpostlogd\fR(8) service.
+/* .IP "\fBpostlog_service_name (postlog)\fR"
+/*	The name of the \fBpostlogd\fR(8) service entry in master.cf.
 /* SEE ALSO
 /*	postconf(5), configuration parameters
-/*	syslogd(8), syslog daemon
+/*	postlogd(8), Postfix logging
+/*	syslogd(8), system logging
 /* LICENSE
 /* .ad
 /* .fi
@@ -69,6 +87,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -76,7 +99,6 @@
 #include <sys_defs.h>
 #include <sys/stat.h>
 #include <string.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -93,8 +115,8 @@
 #include <vstring_vstream.h>
 #include <msg_output.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <warn_stat.h>
+#include <clean_env.h>
 
 /* Global library. */
 
@@ -102,6 +124,8 @@
 #include <mail_version.h>
 #include <mail_conf.h>
 #include <mail_task.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Application-specific. */
 
@@ -148,7 +172,7 @@ static void log_argv(int level, char **argv)
 	if (*argv)
 	    vstring_strcat(buf, " ");
     }
-    msg_text(level, vstring_str(buf));
+    msg_printf(level, "%s", vstring_str(buf));
     vstring_free(buf);
 }
 
@@ -159,7 +183,7 @@ static void log_stream(int level, VSTREAM *fp)
     VSTRING *buf = vstring_alloc(100);
 
     while (vstring_get_nonl(buf, fp) != VSTREAM_EOF)
-	msg_text(level, vstring_str(buf));
+	msg_printf(level, "%s", vstring_str(buf));
     vstring_free(buf);
 }
 
@@ -170,12 +194,11 @@ MAIL_VERSION_STAMP_DECLARE;
 int     main(int argc, char **argv)
 {
     struct stat st;
-    char   *slash;
     int     fd;
     int     ch;
     const char *tag;
-    int     log_flags = 0;
     int     level = MSG_INFO;
+    ARGV   *import_env;
 
     /*
      * Fingerprint executables and core dumps.
@@ -200,13 +223,10 @@ int     main(int argc, char **argv)
     /*
      * Set up diagnostics.
      */
-    if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
-	tag = mail_task(slash + 1);
-    else
-	tag = mail_task(argv[0]);
+    tag = mail_task(argv[0]);
     if (isatty(STDERR_FILENO))
 	msg_vstream_init(tag, VSTREAM_ERR);
-    msg_syslog_init(tag, LOG_PID, LOG_FACILITY);
+    maillog_client_init(tag, MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*
      * Check the Postfix library version as soon as we enable logging.
@@ -216,17 +236,17 @@ int     main(int argc, char **argv)
     /*
      * Parse switches.
      */
+    tag = 0;
     while ((ch = GETOPT(argc, argv, "c:ip:t:v")) > 0) {
 	switch (ch) {
 	default:
-	    msg_fatal("usage: %s [-c config_dir] [-i] [-p priority] [-t tag] [-v] [text]", tag);
+	    msg_fatal("usage: %s [-c config_dir] [-i] [-p priority] [-t tag] [-v] [text]", argv[0]);
 	    break;
 	case 'c':
 	    if (setenv(CONF_ENV_PATH, optarg, 1) < 0)
 		msg_fatal("out of memory");
 	    break;
 	case 'i':
-	    log_flags |= LOG_PID;
 	    break;
 	case 'p':
 	    level = level_map(optarg);
@@ -241,26 +261,24 @@ int     main(int argc, char **argv)
     }
 
     /*
-     * Process the main.cf file. This overrides any logging facility that was
-     * specified with msg_syslog_init();
+     * Process the main.cf file. This may change the syslog_name setting and
+     * may require that mail_task() be re-evaluated.
      */
     mail_conf_read();
-    if (tag == 0 && strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0) {
-	if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
-	    tag = mail_task(slash + 1);
-	else
-	    tag = mail_task(argv[0]);
-    }
+    /* Enforce consistent operation of different Postfix parts. */
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
+    update_env(import_env->argv);
+    argv_free(import_env);
+    if (tag == 0)
+	tag = mail_task(argv[0]);
 
     /*
      * Re-initialize the logging, this time with the tag specified in main.cf
      * or on the command line.
      */
-    if (tag != 0) {
-	if (isatty(STDERR_FILENO))
-	    msg_vstream_init(tag, VSTREAM_ERR);
-	msg_syslog_init(tag, LOG_PID, LOG_FACILITY);
-    }
+    if (isatty(STDERR_FILENO))
+	msg_vstream_init(tag, VSTREAM_ERR);
+    maillog_client_init(tag, MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*
      * Log the command line or log lines from standard input.
@@ -270,5 +288,11 @@ int     main(int argc, char **argv)
     } else {
 	log_stream(level, VSTREAM_IN);
     }
+
+    /*
+     * Consistency with msg(3) functions.
+     */
+    if (level >= MSG_FATAL)
+	sleep(1);
     exit(0);
 }

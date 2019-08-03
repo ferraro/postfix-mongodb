@@ -30,7 +30,8 @@
 /*	it can connect to Postfix daemon processes.
 /* DIAGNOSTICS
 /*	Fatal errors: malformed input, I/O error, out of memory. Problems
-/*	are logged to \fBsyslogd\fR(8) and to the standard error stream.
+/*	are logged to \fBsyslogd\fR(8) or \fBpostlogd\fR(8) and to
+/*	the standard error stream.
 /*	When the input is incomplete, or when the process receives a HUP,
 /*	INT, QUIT or TERM signal, the queue file is deleted.
 /* ENVIRONMENT
@@ -56,21 +57,23 @@
 /*	\fBpostconf\fR(5) for more details including examples.
 /* .IP "\fBalternate_config_directories (empty)\fR"
 /*	A list of non-default Postfix configuration directories that may
-/*	be specified with "-c config_directory" on the command line, or
-/*	via the MAIL_CONFIG environment parameter.
+/*	be specified with "-c config_directory" on the command line (in the
+/*	case of \fBsendmail\fR(1), with the "-C" option), or via the MAIL_CONFIG
+/*	environment parameter.
 /* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
 /*	The default location of the Postfix main.cf and master.cf
 /*	configuration files.
 /* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
-/*	The list of environment parameters that a Postfix process will
-/*	import from a non-Postfix parent process.
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
 /*	The location of the Postfix top-level queue directory.
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* .IP "\fBtrigger_timeout (10s)\fR"
 /*	The time limit for sending a trigger to a Postfix daemon (for
 /*	example, the \fBpickup\fR(8) or \fBqmgr\fR(8) daemon).
@@ -84,6 +87,7 @@
 /* SEE ALSO
 /*	sendmail(1), compatibility interface
 /*	postconf(5), configuration parameters
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* LICENSE
 /* .ad
@@ -94,6 +98,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -106,7 +115,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <syslog.h>
 #include <errno.h>
 #include <warn_stat.h>
 
@@ -117,7 +125,6 @@
 #include <vstream.h>
 #include <vstring.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <argv.h>
 #include <iostuff.h>
 #include <stringops.h>
@@ -135,8 +142,11 @@
 #include <cleanup_user.h>
 #include <record.h>
 #include <rec_type.h>
+#include <mail_dict.h>
 #include <user_acl.h>
 #include <rec_attr_map.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Application-specific. */
 
@@ -177,9 +187,11 @@ static void postdrop_sig(int sig)
     /*
      * This is the fatal error handler. Don't try to do anything fancy.
      * 
-     * msg_vstream does not allocate memory, but msg_syslog may indirectly in
-     * syslog(), so it should not be called from a user-triggered signal
-     * handler.
+     * To avoid privilege escalation in a set-gid program, Postfix logging
+     * functions must not be called from a user-triggered signal handler,
+     * because Postfix logging functions may allocate memory on the fly (as
+     * does the syslog() library function), and the memory allocator is not
+     * reentrant.
      * 
      * Assume atomic signal() updates, even when emulated with sigaction(). We
      * use the in-kernel SIGINT handler address as an atomic variable to
@@ -263,7 +275,7 @@ int     main(int argc, char **argv)
      */
     argv[0] = "postdrop";
     msg_vstream_init(argv[0], VSTREAM_ERR);
-    msg_syslog_init(mail_task("postdrop"), LOG_PID, LOG_FACILITY);
+    maillog_client_init(mail_task("postdrop"), MAILLOG_CLIENT_FLAG_NONE);
     set_mail_conf_str(VAR_PROCNAME, var_procname = mystrdup(argv[0]));
 
     /*
@@ -296,23 +308,20 @@ int     main(int argc, char **argv)
 
     /*
      * Read the global configuration file and extract configuration
-     * information. Some claim that the user should supply the working
-     * directory instead. That might be OK, given that this command needs
-     * write permission in a subdirectory called "maildrop". However we still
-     * need to reliably detect incomplete input, and so we must perform
-     * record-level I/O. With that, we should also take the opportunity to
-     * perform some sanity checks on the input.
+     * information.
      */
     mail_conf_read();
-    if (strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0)
-	msg_syslog_init(mail_task("postdrop"), LOG_PID, LOG_FACILITY);
+    /* Re-evaluate mail_task() after reading main.cf. */
+    maillog_client_init(mail_task("postdrop"), MAILLOG_CLIENT_FLAG_NONE);
     get_mail_conf_str_table(str_table);
 
     /*
      * Mail submission access control. Should this be in the user-land gate,
      * or in the daemon process?
      */
-    if ((errstr = check_user_acl_byuid(var_submit_acl, uid)) != 0)
+    mail_dict_init();
+    if ((errstr = check_user_acl_byuid(VAR_SUBMIT_ACL, var_submit_acl,
+				       uid)) != 0)
 	msg_fatal("User %s(%ld) is not allowed to submit mail",
 		  errstr, (long) uid);
 
@@ -327,7 +336,7 @@ int     main(int argc, char **argv)
      * This program is installed with setgid privileges. Strip the process
      * environment so that we don't have to trust the C library.
      */
-    import_env = argv_split(var_import_environ, ", \t\r\n");
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
     clean_env(import_env->argv);
     argv_free(import_env);
 
@@ -371,7 +380,7 @@ int     main(int argc, char **argv)
     dst = mail_stream_file(MAIL_QUEUE_MAILDROP, MAIL_CLASS_PUBLIC,
 			   var_pickup_service, 0444);
     attr_print(VSTREAM_OUT, ATTR_FLAG_NONE,
-	       ATTR_TYPE_STR, MAIL_ATTR_QUEUEID, dst->id,
+	       SEND_ATTR_STR(MAIL_ATTR_QUEUEID, dst->id),
 	       ATTR_TYPE_END);
     vstream_fflush(VSTREAM_OUT);
     postdrop_path = mystrdup(VSTREAM_PATH(dst->stream));
@@ -390,7 +399,7 @@ int     main(int argc, char **argv)
      * Allow attribute records if the attribute specifies the MIME body type
      * (sendmail -B).
      */
-    vstream_control(VSTREAM_IN, VSTREAM_CTL_PATH, "stdin", VSTREAM_CTL_END);
+    vstream_control(VSTREAM_IN, CA_VSTREAM_CTL_PATH("stdin"), CA_VSTREAM_CTL_END);
     buf = vstring_alloc(100);
     expected = segment_info;
     /* Override time information from the untrusted caller. */
@@ -513,8 +522,8 @@ int     main(int argc, char **argv)
      * Send the completion status to the caller and terminate.
      */
     attr_print(VSTREAM_OUT, ATTR_FLAG_NONE,
-	       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
-	       ATTR_TYPE_STR, MAIL_ATTR_WHY, "",
+	       SEND_ATTR_INT(MAIL_ATTR_STATUS, status),
+	       SEND_ATTR_STR(MAIL_ATTR_WHY, ""),
 	       ATTR_TYPE_END);
     vstream_fflush(VSTREAM_OUT);
     exit(status);

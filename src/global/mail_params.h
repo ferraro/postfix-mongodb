@@ -16,6 +16,14 @@
   */
 typedef int bool;
 
+#ifdef USE_TLS
+#include <openssl/opensslv.h>		/* OPENSSL_VERSION_NUMBER */
+#include <openssl/objects.h>		/* SN_* and NID_* macros */
+#if OPENSSL_VERSION_NUMBER < 0x1000200fUL
+#error "OpenSSL releases prior to 1.0.2 are no longer supported"
+#endif
+#endif
+
  /*
   * Name used when this mail system announces itself.
   */
@@ -36,6 +44,25 @@ extern bool var_helpful_warnings;
 #define VAR_SHOW_UNK_RCPT_TABLE	"show_user_unknown_table_name"
 #define DEF_SHOW_UNK_RCPT_TABLE	1
 extern bool var_show_unk_rcpt_table;
+
+ /*
+  * Compatibility level and migration support. Update postconf(5),
+  * COMPATIBILITY_README, and conf/main.cf when updating the current
+  * compatibility level.
+  */
+#define VAR_COMPAT_LEVEL	"compatibility_level"
+#define DEF_COMPAT_LEVEL	0
+#define CUR_COMPAT_LEVEL	2
+extern int var_compat_level;
+
+extern int warn_compat_break_app_dot_mydomain;
+extern int warn_compat_break_smtputf8_enable;
+extern int warn_compat_break_chroot;
+extern int warn_compat_break_relay_restrictions;	/* Postfix 2.10. */
+
+extern int warn_compat_break_relay_domains;
+extern int warn_compat_break_flush_domains;
+extern int warn_compat_break_mynetworks_style;
 
  /*
   * What problem classes should be reported to the postmaster via email.
@@ -198,13 +225,24 @@ extern char *var_null_relay_maps_key;
 
 #define VAR_SMTP_FALLBACK	"smtp_fallback_relay"
 #define DEF_SMTP_FALLBACK	"$fallback_relay"
-#define VAR_LMTP_FALLBACK	"smtp_fallback_relay"
+#define VAR_LMTP_FALLBACK	"lmtp_fallback_relay"
+#define DEF_LMTP_FALLBACK	""
 #define DEF_FALLBACK_RELAY	""
 extern char *var_fallback_relay;
 
 #define VAR_DISABLE_DNS		"disable_dns_lookups"
 #define DEF_DISABLE_DNS		0
 extern bool var_disable_dns;
+
+#define SMTP_DNS_SUPPORT_DISABLED	"disabled"
+#define SMTP_DNS_SUPPORT_ENABLED	"enabled"
+#define SMTP_DNS_SUPPORT_DNSSEC		"dnssec"
+
+#define VAR_SMTP_DNS_SUPPORT	"smtp_dns_support_level"
+#define DEF_SMTP_DNS_SUPPORT	""
+#define VAR_LMTP_DNS_SUPPORT	"lmtp_dns_support_level"
+#define DEF_LMTP_DNS_SUPPORT	""
+extern char *var_smtp_dns_support;
 
 #define SMTP_HOST_LOOKUP_DNS	"dns"
 #define SMTP_HOST_LOOKUP_NATIVE	"native"
@@ -350,6 +388,23 @@ extern char *var_rcpt_witheld;
 extern bool var_always_add_hdrs;
 
  /*
+  * Dropping message headers.
+  */
+#define VAR_DROP_HDRS		"message_drop_headers"
+#define DEF_DROP_HDRS		"bcc, content-length, resent-bcc, return-path"
+extern char *var_drop_hdrs;
+
+ /*
+  * From: header format: we provide canned versions only, no Sendmail-style
+  * macro expansions.
+  */
+#define HFROM_FORMAT_NAME_STD	"standard"	/* From: name <address> */
+#define HFROM_FORMAT_NAME_OBS	"obsolete"	/* From: address (name) */
+#define VAR_HFROM_FORMAT	"header_from_format"
+#define DEF_HFROM_FORMAT	HFROM_FORMAT_NAME_STD
+extern char *var_hfrom_format;
+
+ /*
   * Standards violation: allow/permit RFC 822-style addresses in SMTP
   * commands.
   */
@@ -358,7 +413,7 @@ extern bool var_always_add_hdrs;
 extern bool var_strict_rfc821_env;
 
  /*
-  * Standards violation: send "250 AUTH=list" in order to accomodate clients
+  * Standards violation: send "250 AUTH=list" in order to accommodate clients
   * that implement an old version of the protocol.
   */
 #define VAR_BROKEN_AUTH_CLNTS	"broken_sasl_auth_clients"
@@ -457,7 +512,8 @@ extern bool var_swap_bangpath;
 extern bool var_append_at_myorigin;
 
 #define VAR_APP_DOT_MYDOMAIN	"append_dot_mydomain"
-#define DEF_APP_DOT_MYDOMAIN	1
+#define DEF_APP_DOT_MYDOMAIN	"${{$compatibility_level} < {1} ? " \
+				"{yes} : {no}}"
 extern bool var_append_dot_mydomain;
 
 #define VAR_PERCENT_HACK	"allow_percent_hack"
@@ -514,7 +570,9 @@ extern char *var_luser_relay;
   * Local delivery: mailbox delivery.
   */
 #define VAR_MAIL_SPOOL_DIR	"mail_spool_directory"
+#ifndef DEF_MAIL_SPOOL_DIR
 #define DEF_MAIL_SPOOL_DIR	_PATH_MAILDIR
+#endif
 extern char *var_mail_spool_dir;
 
 #define VAR_HOME_MAILBOX	"home_mailbox"
@@ -625,12 +683,19 @@ extern bool var_exp_own_alias;
 extern bool var_stat_home_dir;
 
  /*
-  * Queue manager: maximal size of the duplicate expansion filter. By
+  * Cleanup server: maximal size of the duplicate expansion filter. By
   * default, we do graceful degradation with huge mailing lists.
   */
 #define VAR_DUP_FILTER_LIMIT	"duplicate_filter_limit"
 #define DEF_DUP_FILTER_LIMIT	1000
 extern int var_dup_filter_limit;
+
+ /*
+  * Transport Layer Security (TLS) protocol support.
+  */
+#define VAR_TLS_MGR_SERVICE	"tlsmgr_service_name"
+#define DEF_TLS_MGR_SERVICE	"tlsmgr"
+extern char *var_tls_mgr_service;
 
 #define VAR_TLS_APPEND_DEF_CA	"tls_append_default_CA"
 #define DEF_TLS_APPEND_DEF_CA	0	/* Postfix < 2.8 BC break */
@@ -703,6 +768,10 @@ extern int var_dsn_queue_time;
 #define VAR_DELAY_WARN_TIME	"delay_warning_time"
 #define DEF_DELAY_WARN_TIME	"0h"
 extern int var_delay_warn_time;
+
+#define VAR_DSN_DELAY_CLEARED	"confirm_delay_cleared"
+#define DEF_DSN_DELAY_CLEARED	0
+extern int var_dsn_delay_cleared;
 
  /*
   * Queue manager: various in-core message and recipient limits.
@@ -947,6 +1016,12 @@ extern char *var_bestmx_transp;
 #define DEF_LMTP_CACHE_CONNT	"2s"
 extern int var_smtp_cache_conn;
 
+#define VAR_SMTP_REUSE_COUNT	"smtp_connection_reuse_count_limit"
+#define DEF_SMTP_REUSE_COUNT	0
+#define VAR_LMTP_REUSE_COUNT	"lmtp_connection_reuse_count_limit"
+#define DEF_LMTP_REUSE_COUNT	0
+extern int var_smtp_reuse_count;
+
 #define VAR_SMTP_REUSE_TIME	"smtp_connection_reuse_time_limit"
 #define DEF_SMTP_REUSE_TIME	"300s"
 #define VAR_LMTP_REUSE_TIME	"lmtp_connection_reuse_time_limit"
@@ -1141,11 +1216,11 @@ extern char *var_smtp_generic_maps;
 extern char *var_smtpd_banner;
 
 #define VAR_SMTPD_TMOUT		"smtpd_timeout"
-#define DEF_SMTPD_TMOUT		"${stress?10}${stress:300}s"
+#define DEF_SMTPD_TMOUT		"${stress?{10}:{300}}s"
 extern int var_smtpd_tmout;
 
 #define VAR_SMTPD_STARTTLS_TMOUT "smtpd_starttls_timeout"
-#define DEF_SMTPD_STARTTLS_TMOUT "${stress?10}${stress:300}s"
+#define DEF_SMTPD_STARTTLS_TMOUT "${stress?{10}:{300}}s"
 extern int var_smtpd_starttls_tmout;
 
 #define VAR_SMTPD_RCPT_LIMIT	"smtpd_recipient_limit"
@@ -1157,7 +1232,7 @@ extern int var_smtpd_rcpt_limit;
 extern int var_smtpd_soft_erlim;
 
 #define VAR_SMTPD_HARD_ERLIM	"smtpd_hard_error_limit"
-#define DEF_SMTPD_HARD_ERLIM	"${stress?1}${stress:20}"
+#define DEF_SMTPD_HARD_ERLIM	"${stress?{1}:{20}}"
 extern int var_smtpd_hard_erlim;
 
 #define VAR_SMTPD_ERR_SLEEP	"smtpd_error_sleep_time"
@@ -1165,7 +1240,7 @@ extern int var_smtpd_hard_erlim;
 extern int var_smtpd_err_sleep;
 
 #define VAR_SMTPD_JUNK_CMD	"smtpd_junk_command_limit"
-#define DEF_SMTPD_JUNK_CMD	"${stress?1}${stress:100}"
+#define DEF_SMTPD_JUNK_CMD	"${stress?{1}:{100}}"
 extern int var_smtpd_junk_cmd_limit;
 
 #define VAR_SMTPD_RCPT_OVERLIM	"smtpd_recipient_overshoot_limit"
@@ -1220,6 +1295,10 @@ extern bool var_smtpd_tls_req_ccert;
 #define DEF_SMTPD_TLS_CCERT_VD	9
 extern int var_smtpd_tls_ccert_vd;
 
+#define VAR_SMTPD_TLS_CHAIN_FILES	"smtpd_tls_chain_files"
+#define DEF_SMTPD_TLS_CHAIN_FILES	""
+extern char *var_smtpd_tls_chain_files;
+
 #define VAR_SMTPD_TLS_CERT_FILE	"smtpd_tls_cert_file"
 #define DEF_SMTPD_TLS_CERT_FILE	""
 extern char *var_smtpd_tls_cert_file;
@@ -1253,15 +1332,15 @@ extern char *var_smtpd_tls_CAfile;
 extern char *var_smtpd_tls_CApath;
 
 #define VAR_SMTPD_TLS_PROTO		"smtpd_tls_protocols"
-#define DEF_SMTPD_TLS_PROTO		""
+#define DEF_SMTPD_TLS_PROTO		"!SSLv2, !SSLv3"
 extern char *var_smtpd_tls_proto;
 
 #define VAR_SMTPD_TLS_MAND_PROTO	"smtpd_tls_mandatory_protocols"
-#define DEF_SMTPD_TLS_MAND_PROTO	"!SSLv2"
+#define DEF_SMTPD_TLS_MAND_PROTO	"!SSLv2, !SSLv3"
 extern char *var_smtpd_tls_mand_proto;
 
 #define VAR_SMTPD_TLS_CIPH	"smtpd_tls_ciphers"
-#define DEF_SMTPD_TLS_CIPH	"export"
+#define DEF_SMTPD_TLS_CIPH	"medium"
 extern char *var_smtpd_tls_ciph;
 
 #define VAR_SMTPD_TLS_MAND_CIPH	"smtpd_tls_mandatory_ciphers"
@@ -1289,7 +1368,7 @@ extern char *var_smtpd_tls_dh512_param_file;
 extern char *var_smtpd_tls_dh1024_param_file;
 
 #define VAR_SMTPD_TLS_EECDH	"smtpd_tls_eecdh_grade"
-#define DEF_SMTPD_TLS_EECDH	"strong"
+#define DEF_SMTPD_TLS_EECDH	"auto"
 extern char *var_smtpd_tls_eecdh;
 
 #define VAR_SMTPD_TLS_LOGLEVEL	"smtpd_tls_loglevel"
@@ -1304,6 +1383,7 @@ extern bool var_smtpd_tls_received_header;
 #define DEF_SMTPD_TLS_SCACHE_DB	""
 extern char *var_smtpd_tls_scache_db;
 
+#define MAX_SMTPD_TLS_SCACHETIME	8640000
 #define VAR_SMTPD_TLS_SCACHTIME	"smtpd_tls_session_cache_timeout"
 #define DEF_SMTPD_TLS_SCACHTIME	"3600s"
 extern int var_smtpd_tls_scache_timeout;
@@ -1340,6 +1420,12 @@ extern bool var_smtp_enforce_tls;
 #define DEF_LMTP_TLS_ENFORCE_PN	1
 extern bool var_smtp_tls_enforce_peername;
 
+#define VAR_SMTP_TLS_WRAPPER	"smtp_tls_wrappermode"
+#define DEF_SMTP_TLS_WRAPPER	0
+#define VAR_LMTP_TLS_WRAPPER	"lmtp_tls_wrappermode"
+#define DEF_LMTP_TLS_WRAPPER	0
+extern bool var_smtp_tls_wrappermode;
+
 #define VAR_SMTP_TLS_LEVEL	"smtp_tls_security_level"
 #define DEF_SMTP_TLS_LEVEL	""
 #define VAR_LMTP_TLS_LEVEL	"lmtp_tls_security_level"
@@ -1351,6 +1437,12 @@ extern char *var_smtp_tls_level;
 #define VAR_LMTP_TLS_SCERT_VD	"lmtp_tls_scert_verifydepth"
 #define DEF_LMTP_TLS_SCERT_VD	9
 extern int var_smtp_tls_scert_vd;
+
+#define VAR_SMTP_TLS_CHAIN_FILES	"smtp_tls_chain_files"
+#define DEF_SMTP_TLS_CHAIN_FILES	""
+#define VAR_LMTP_TLS_CHAIN_FILES	"lmtp_tls_chain_files"
+#define DEF_LMTP_TLS_CHAIN_FILES	""
+extern char *var_smtp_tls_chain_files;
 
 #define VAR_SMTP_TLS_CERT_FILE	"smtp_tls_cert_file"
 #define DEF_SMTP_TLS_CERT_FILE	""
@@ -1401,9 +1493,9 @@ extern char *var_smtp_tls_CAfile;
 extern char *var_smtp_tls_CApath;
 
 #define VAR_SMTP_TLS_CIPH	"smtp_tls_ciphers"
-#define DEF_SMTP_TLS_CIPH	"export"
+#define DEF_SMTP_TLS_CIPH	"medium"
 #define VAR_LMTP_TLS_CIPH	"lmtp_tls_ciphers"
-#define DEF_LMTP_TLS_CIPH	"export"
+#define DEF_LMTP_TLS_CIPH	"medium"
 extern char *var_smtp_tls_ciph;
 
 #define VAR_SMTP_TLS_MAND_CIPH	"smtp_tls_mandatory_ciphers"
@@ -1430,6 +1522,12 @@ extern char *var_smtp_tls_mand_excl;
 #define DEF_LMTP_TLS_FPT_DGST	"md5"
 extern char *var_smtp_tls_fpt_dgst;
 
+#define VAR_SMTP_TLS_TAFILE	"smtp_tls_trust_anchor_file"
+#define DEF_SMTP_TLS_TAFILE	""
+#define VAR_LMTP_TLS_TAFILE	"lmtp_tls_trust_anchor_file"
+#define DEF_LMTP_TLS_TAFILE	""
+extern char *var_smtp_tls_tafile;
+
 #define VAR_SMTP_TLS_LOGLEVEL	"smtp_tls_loglevel"
 #define DEF_SMTP_TLS_LOGLEVEL	"0"
 #define VAR_LMTP_TLS_LOGLEVEL	"lmtp_tls_loglevel"
@@ -1450,8 +1548,10 @@ extern bool var_smtp_tls_note_starttls_offer;
 extern char *var_smtp_tls_scache_db;
 extern char *var_lmtp_tls_scache_db;
 
+#define MAX_SMTP_TLS_SCACHETIME	8640000
 #define VAR_SMTP_TLS_SCACHTIME	"smtp_tls_session_cache_timeout"
 #define DEF_SMTP_TLS_SCACHTIME	"3600s"
+#define MAX_LMTP_TLS_SCACHETIME	8640000
 #define VAR_LMTP_TLS_SCACHTIME	"lmtp_tls_session_cache_timeout"
 #define DEF_LMTP_TLS_SCACHTIME	"3600s"
 extern int var_smtp_tls_scache_timeout;
@@ -1464,15 +1564,15 @@ extern int var_lmtp_tls_scache_timeout;
 extern char *var_smtp_tls_policy;
 
 #define VAR_SMTP_TLS_PROTO	"smtp_tls_protocols"
-#define DEF_SMTP_TLS_PROTO	"!SSLv2"
+#define DEF_SMTP_TLS_PROTO	"!SSLv2, !SSLv3"
 #define VAR_LMTP_TLS_PROTO	"lmtp_tls_protocols"
-#define DEF_LMTP_TLS_PROTO	"!SSLv2"
+#define DEF_LMTP_TLS_PROTO	"!SSLv2, !SSLv3"
 extern char *var_smtp_tls_proto;
 
 #define VAR_SMTP_TLS_MAND_PROTO	"smtp_tls_mandatory_protocols"
-#define DEF_SMTP_TLS_MAND_PROTO	"!SSLv2"
+#define DEF_SMTP_TLS_MAND_PROTO	"!SSLv2, !SSLv3"
 #define VAR_LMTP_TLS_MAND_PROTO	"lmtp_tls_mandatory_protocols"
-#define DEF_LMTP_TLS_MAND_PROTO	"!SSLv2"
+#define DEF_LMTP_TLS_MAND_PROTO	"!SSLv2, !SSLv3"
 extern char *var_smtp_tls_mand_proto;
 
 #define VAR_SMTP_TLS_VFY_CMATCH	"smtp_tls_verify_cert_match"
@@ -1497,11 +1597,28 @@ extern char *var_smtp_tls_sec_cmatch;
 #define DEF_LMTP_TLS_FPT_CMATCH ""
 extern char *var_smtp_tls_fpt_cmatch;
 
+#define VAR_SMTP_TLS_SNI "smtp_tls_servername"
+#define DEF_SMTP_TLS_SNI ""
+#define VAR_LMTP_TLS_SNI "lmtp_tls_servername"
+#define DEF_LMTP_TLS_SNI ""
+extern char *var_smtp_tls_sni;
+
 #define VAR_SMTP_TLS_BLK_EARLY_MAIL_REPLY "smtp_tls_block_early_mail_reply"
 #define DEF_SMTP_TLS_BLK_EARLY_MAIL_REPLY 0
 #define VAR_LMTP_TLS_BLK_EARLY_MAIL_REPLY "lmtp_tls_block_early_mail_reply"
 #define DEF_LMTP_TLS_BLK_EARLY_MAIL_REPLY 0
 extern bool var_smtp_tls_blk_early_mail_reply;
+
+#define VAR_SMTP_TLS_FORCE_TLSA "smtp_tls_force_insecure_host_tlsa_lookup"
+#define DEF_SMTP_TLS_FORCE_TLSA 0
+#define VAR_LMTP_TLS_FORCE_TLSA "lmtp_tls_force_insecure_host_tlsa_lookup"
+#define DEF_LMTP_TLS_FORCE_TLSA 0
+extern bool var_smtp_tls_force_tlsa;
+
+ /* SMTP only */
+#define VAR_SMTP_TLS_INSECURE_MX_POLICY "smtp_tls_dane_insecure_mx_policy"
+#define DEF_SMTP_TLS_INSECURE_MX_POLICY "dane"
+extern char *var_smtp_tls_insecure_mx_policy;
 
  /*
   * SASL authentication support, SMTP server side.
@@ -1521,6 +1638,10 @@ extern char *var_smtpd_sasl_opts;
 #define VAR_SMTPD_SASL_PATH	"smtpd_sasl_path"
 #define DEF_SMTPD_SASL_PATH	"smtpd"
 extern char *var_smtpd_sasl_path;
+
+#define VAR_SMTPD_SASL_SERVICE	"smtpd_sasl_service"
+#define DEF_SMTPD_SASL_SERVICE	"smtp"
+extern char *var_smtpd_sasl_service;
 
 #define VAR_CYRUS_CONF_PATH	"cyrus_sasl_config_path"
 #define DEF_CYRUS_CONF_PATH	""
@@ -1553,8 +1674,23 @@ extern char *var_smtpd_snd_auth_maps;
 #define REJECT_SENDER_LOGIN_MISMATCH	"reject_sender_login_mismatch"
 #define REJECT_AUTH_SENDER_LOGIN_MISMATCH \
 				"reject_authenticated_sender_login_mismatch"
+#define REJECT_KNOWN_SENDER_LOGIN_MISMATCH \
+				"reject_known_sender_login_mismatch"
 #define REJECT_UNAUTH_SENDER_LOGIN_MISMATCH \
 				"reject_unauthenticated_sender_login_mismatch"
+
+ /*
+  * https://tools.ietf.org/html/rfc4954#page-5
+  * 
+  * (At the time of writing of this document, 12288 octets is considered to be a
+  * sufficient line length limit for handling of deployed authentication
+  * mechanisms.)
+  * 
+  * The default value is also the minimum permissible value for this parameter.
+  */
+#define VAR_SMTPD_SASL_RESP_LIMIT	"smtpd_sasl_response_limit"
+#define DEF_SMTPD_SASL_RESP_LIMIT 12288
+extern int var_smtpd_sasl_resp_limit;
 
  /*
   * SASL authentication support, SMTP client side.
@@ -1606,6 +1742,12 @@ extern char *var_smtp_sasl_tlsv_opts;
 #define VAR_SMTP_DUMMY_MAIL_AUTH	"smtp_send_dummy_mail_auth"
 #define DEF_SMTP_DUMMY_MAIL_AUTH	0
 extern bool var_smtp_dummy_mail_auth;
+
+#define VAR_LMTP_BALANCE_INET_PROTO "lmtp_balance_inet_protocols"
+#define DEF_LMTP_BALANCE_INET_PROTO DEF_SMTP_BALANCE_INET_PROTO
+#define VAR_SMTP_BALANCE_INET_PROTO "smtp_balance_inet_protocols"
+#define DEF_SMTP_BALANCE_INET_PROTO 1
+extern bool var_smtp_balance_inet_proto;
 
  /*
   * LMTP server. The soft error limit determines how many errors an LMTP
@@ -1708,6 +1850,10 @@ extern char *var_smtp_sasl_auth_cache_name;
 #define DEF_LMTP_SASL_AUTH_CACHE_TIME	"90d"
 extern int var_smtp_sasl_auth_cache_time;
 
+#define VAR_SMTP_TCP_PORT	"smtp_tcp_port"
+#define DEF_SMTP_TCP_PORT	"smtp"
+extern char *var_smtp_tcp_port;
+
  /*
   * LMTP client. Timeouts inspired by RFC 1123. The LMTP recipient limit
   * determines how many recipient addresses the LMTP client sends along with
@@ -1797,6 +1943,10 @@ extern int var_virt_recur_limit;
 #define VAR_VIRT_EXPAN_LIMIT	"virtual_alias_expansion_limit"
 #define DEF_VIRT_EXPAN_LIMIT	1000
 extern int var_virt_expan_limit;
+
+#define VAR_VIRT_ADDRLEN_LIMIT	"virtual_alias_address_length_limit"
+#define DEF_VIRT_ADDRLEN_LIMIT	1000
+extern int var_virt_addrlen_limit;
 
  /*
   * Message/queue size limits.
@@ -1914,7 +2064,9 @@ extern int var_trigger_timeout;
 extern char *var_mynetworks;
 
 #define VAR_MYNETWORKS_STYLE	"mynetworks_style"
-#define DEF_MYNETWORKS_STYLE	MYNETWORKS_STYLE_SUBNET
+#define DEF_MYNETWORKS_STYLE	"${{$compatibility_level} < {2} ? " \
+				"{" MYNETWORKS_STYLE_SUBNET "} : " \
+				"{" MYNETWORKS_STYLE_HOST "}}"
 extern char *var_mynetworks_style;
 
 #define	MYNETWORKS_STYLE_CLASS	"class"
@@ -1922,7 +2074,8 @@ extern char *var_mynetworks_style;
 #define	MYNETWORKS_STYLE_HOST	"host"
 
 #define VAR_RELAY_DOMAINS	"relay_domains"
-#define DEF_RELAY_DOMAINS	"$mydestination"
+#define DEF_RELAY_DOMAINS	"${{$compatibility_level} < {2} ? " \
+				"{$mydestination} : {}}"
 extern char *var_relay_domains;
 
 #define VAR_RELAY_TRANSPORT	"relay_transport"
@@ -1957,8 +2110,23 @@ extern char *var_helo_checks;
 #define DEF_MAIL_CHECKS		""
 extern char *var_mail_checks;
 
+#define VAR_RELAY_CHECKS	"smtpd_relay_restrictions"
+#define DEF_RELAY_CHECKS	"${{$compatibility_level} < {1} ? " \
+				"{} : {" PERMIT_MYNETWORKS ", " \
+				PERMIT_SASL_AUTH ", " \
+				DEFER_UNAUTH_DEST "}}"
+extern char *var_relay_checks;
+
+ /*
+  * For warn_compat_break_relay_domains check. Same as DEF_RELAY_CHECKS
+  * except that it evaluates to DUNNO instead of REJECT.
+  */
+#define FAKE_RELAY_CHECKS	PERMIT_MYNETWORKS ", " \
+				PERMIT_SASL_AUTH ", " \
+				PERMIT_AUTH_DEST
+
 #define VAR_RCPT_CHECKS		"smtpd_recipient_restrictions"
-#define DEF_RCPT_CHECKS		PERMIT_MYNETWORKS ", " REJECT_UNAUTH_DEST
+#define DEF_RCPT_CHECKS		""
 extern char *var_rcpt_checks;
 
 #define VAR_ETRN_CHECKS		"smtpd_etrn_restrictions"
@@ -2113,6 +2281,7 @@ extern int var_mul_rcpt_code;
 
 #define PERMIT_AUTH_DEST	"permit_auth_destination"
 #define REJECT_UNAUTH_DEST	"reject_unauth_destination"
+#define DEFER_UNAUTH_DEST	"defer_unauth_destination"
 #define CHECK_RELAY_DOMAINS	"check_relay_domains"
 #define PERMIT_TLS_CLIENTCERTS	"permit_tls_clientcerts"
 #define PERMIT_TLS_ALL_CLIENTCERTS	"permit_tls_all_clientcerts"
@@ -2137,6 +2306,7 @@ extern int var_map_defer_code;
 #define CHECK_CLIENT_ACL	"check_client_access"
 #define CHECK_REVERSE_CLIENT_ACL "check_reverse_client_hostname_access"
 #define CHECK_CCERT_ACL		"check_ccert_access"
+#define CHECK_SASL_ACL		"check_sasl_access"
 #define CHECK_HELO_ACL		"check_helo_access"
 #define CHECK_SENDER_ACL	"check_sender_access"
 #define CHECK_RECIP_ACL		"check_recipient_access"
@@ -2152,6 +2322,11 @@ extern int var_map_defer_code;
 #define CHECK_HELO_NS_ACL	"check_helo_ns_access"
 #define CHECK_SENDER_NS_ACL	"check_sender_ns_access"
 #define CHECK_RECIP_NS_ACL	"check_recipient_ns_access"
+#define CHECK_CLIENT_A_ACL	"check_client_a_access"
+#define CHECK_REVERSE_CLIENT_A_ACL "check_reverse_client_hostname_a_access"
+#define CHECK_HELO_A_ACL	"check_helo_a_access"
+#define CHECK_SENDER_A_ACL	"check_sender_a_access"
+#define CHECK_RECIP_A_ACL	"check_recipient_a_access"
 
 #define WARN_IF_REJECT		"warn_if_reject"
 
@@ -2232,11 +2407,39 @@ extern int var_local_rcpt_code;
 				" $" VAR_RELOCATED_MAPS \
 				" $" VAR_TRANSPORT_MAPS \
 				" $" VAR_MYNETWORKS \
+				" $" VAR_SMTPD_SND_AUTH_MAPS \
 				" $" VAR_SEND_BCC_MAPS \
 				" $" VAR_RCPT_BCC_MAPS \
 				" $" VAR_SMTP_GENERIC_MAPS \
 				" $" VAR_LMTP_GENERIC_MAPS \
-				" $" VAR_ALIAS_MAPS
+				" $" VAR_ALIAS_MAPS \
+				" $" VAR_CLIENT_CHECKS \
+				" $" VAR_HELO_CHECKS \
+				" $" VAR_MAIL_CHECKS \
+				" $" VAR_RELAY_CHECKS \
+				" $" VAR_RCPT_CHECKS \
+				" $" VAR_VRFY_SND_DEF_XPORT_MAPS \
+				" $" VAR_VRFY_RELAY_MAPS \
+				" $" VAR_VRFY_XPORT_MAPS \
+				" $" VAR_FBCK_TRANSP_MAPS \
+				" $" VAR_LMTP_EHLO_DIS_MAPS \
+				" $" VAR_LMTP_PIX_BUG_MAPS \
+				" $" VAR_LMTP_SASL_PASSWD \
+				" $" VAR_LMTP_TLS_POLICY \
+				" $" VAR_MAILBOX_CMD_MAPS \
+				" $" VAR_MBOX_TRANSP_MAPS \
+				" $" VAR_PSC_EHLO_DIS_MAPS \
+				" $" VAR_RBL_REPLY_MAPS \
+				" $" VAR_SND_DEF_XPORT_MAPS \
+				" $" VAR_SND_RELAY_MAPS \
+				" $" VAR_SMTP_EHLO_DIS_MAPS \
+				" $" VAR_SMTP_PIX_BUG_MAPS \
+				" $" VAR_SMTP_SASL_PASSWD \
+				" $" VAR_SMTP_TLS_POLICY \
+				" $" VAR_SMTPD_EHLO_DIS_MAPS \
+				" $" VAR_SMTPD_MILTER_MAPS \
+				" $" VAR_VIRT_GID_MAPS \
+				" $" VAR_VIRT_UID_MAPS
 extern char *var_proxy_read_maps;
 
 #define VAR_PROXY_WRITE_MAPS	"proxy_write_maps"
@@ -2259,6 +2462,9 @@ extern char *var_proxy_write_acl;
   */
 #define VAR_PROCNAME		"process_name"
 extern char *var_procname;
+
+#define VAR_SERVNAME		"service_name"
+extern char *var_servname;
 
 #define VAR_PID			"process_id"
 extern int var_pid;
@@ -2326,7 +2532,9 @@ extern int var_fflush_refresh;
   * and what Postfix exports to the external world.
   */
 #define VAR_IMPORT_ENVIRON		"import_environment"
-#define DEF_IMPORT_ENVIRON		"MAIL_CONFIG MAIL_DEBUG MAIL_LOGTAG TZ XAUTHORITY DISPLAY LANG=C"
+#define DEF_IMPORT_ENVIRON		"MAIL_CONFIG MAIL_DEBUG MAIL_LOGTAG " \
+					"TZ XAUTHORITY DISPLAY LANG=C " \
+					"POSTLOG_SERVICE POSTLOG_HOSTNAME"
 extern char *var_import_environ;
 
 #define VAR_EXPORT_ENVIRON		"export_environment"
@@ -2382,7 +2590,7 @@ extern char *var_virt_mailbox_lock;
 #define VAR_SYSLOG_NAME			"syslog_name"
 #if 1
 #define DEF_SYSLOG_NAME			\
-    "${" VAR_MULTI_NAME ":postfix}${" VAR_MULTI_NAME "?$" VAR_MULTI_NAME "}"
+    "${" VAR_MULTI_NAME "?{$" VAR_MULTI_NAME "}:{postfix}}"
 #else
 #define DEF_SYSLOG_NAME			"postfix"
 #endif
@@ -2494,6 +2702,12 @@ extern int var_fault_inj_code;
 #define DEF_NEWALIAS_PATH		"/usr/bin/newaliases"
 #endif
 
+#define VAR_OPENSSL_PATH		"openssl_path"
+#ifndef DEF_OPENSSL_PATH
+#define DEF_OPENSSL_PATH		"openssl"
+#endif
+extern char *var_openssl_path;
+
 #define VAR_MANPAGE_DIR			"manpage_directory"
 #ifndef DEF_MANPAGE_DIR
 #define DEF_MANPAGE_DIR			"/usr/local/man"
@@ -2597,6 +2811,10 @@ extern int var_scache_ttl_lim;
 #define DEF_SCACHE_STAT_TIME		"600s"
 extern int var_scache_stat_time;
 
+#define VAR_VRFY_PEND_LIMIT		"address_verify_pending_request_limit"
+#define DEF_VRFY_PEND_LIMIT		(DEF_QMGR_ACT_LIMIT / 4)
+extern int var_vrfy_pend_limit;
+
  /*
   * Address verification service.
   */
@@ -2641,7 +2859,7 @@ extern char *var_verify_sender;
 extern int var_verify_sender_ttl;
 
 #define VAR_VERIFY_POLL_COUNT		"address_verify_poll_count"
-#define DEF_VERIFY_POLL_COUNT		"${stress?1}${stress:3}"
+#define DEF_VERIFY_POLL_COUNT		"${stress?{1}:{3}}"
 extern int var_verify_poll_count;
 
 #define VAR_VERIFY_POLL_DELAY		"address_verify_poll_delay"
@@ -2679,6 +2897,14 @@ extern char *var_vrfy_relay_maps;
 #define VAR_VRFY_XPORT_MAPS		"address_verify_transport_maps"
 #define DEF_VRFY_XPORT_MAPS		"$" VAR_TRANSPORT_MAPS
 extern char *var_vrfy_xport_maps;
+
+#define SMTP_VRFY_TGT_RCPT		"rcpt"
+#define SMTP_VRFY_TGT_DATA		"data"
+#define VAR_LMTP_VRFY_TGT		"lmtp_address_verify_target"
+#define DEF_LMTP_VRFY_TGT		SMTP_VRFY_TGT_RCPT
+#define VAR_SMTP_VRFY_TGT		"smtp_address_verify_target"
+#define DEF_SMTP_VRFY_TGT		SMTP_VRFY_TGT_RCPT
+extern char *var_smtp_vrfy_tgt;
 
  /*
   * Message delivery trace service.
@@ -2719,6 +2945,13 @@ extern int var_db_create_buf;
 #define	VAR_DB_READ_BUF			"berkeley_db_read_buffer_size"
 #define DEF_DB_READ_BUF			(128 *1024)
 extern int var_db_read_buf;
+
+ /*
+  * OpenLDAP LMDB settings.
+  */
+#define VAR_LMDB_MAP_SIZE		"lmdb_map_size"
+#define DEF_LMDB_MAP_SIZE		(16 * 1024 *1024)
+extern long var_lmdb_map_size;
 
  /*
   * Named queue file attributes.
@@ -2819,6 +3052,10 @@ extern char *var_smtpd_input_transp;
 #define DEF_SMTPD_POLICY_TMOUT		"100s"
 extern int var_smtpd_policy_tmout;
 
+#define VAR_SMTPD_POLICY_REQ_LIMIT	"smtpd_policy_service_request_limit"
+#define DEF_SMTPD_POLICY_REQ_LIMIT	0
+extern int var_smtpd_policy_req_limit;
+
 #define VAR_SMTPD_POLICY_IDLE		"smtpd_policy_service_max_idle"
 #define DEF_SMTPD_POLICY_IDLE		"300s"
 extern int var_smtpd_policy_idle;
@@ -2826,6 +3063,22 @@ extern int var_smtpd_policy_idle;
 #define VAR_SMTPD_POLICY_TTL		"smtpd_policy_service_max_ttl"
 #define DEF_SMTPD_POLICY_TTL		"1000s"
 extern int var_smtpd_policy_ttl;
+
+#define VAR_SMTPD_POLICY_TRY_LIMIT	"smtpd_policy_service_try_limit"
+#define DEF_SMTPD_POLICY_TRY_LIMIT	2
+extern int var_smtpd_policy_try_limit;
+
+#define VAR_SMTPD_POLICY_TRY_DELAY	"smtpd_policy_service_retry_delay"
+#define DEF_SMTPD_POLICY_TRY_DELAY	"1s"
+extern int var_smtpd_policy_try_delay;
+
+#define VAR_SMTPD_POLICY_DEF_ACTION	"smtpd_policy_service_default_action"
+#define DEF_SMTPD_POLICY_DEF_ACTION	"451 4.3.5 Server configuration problem"
+extern char *var_smtpd_policy_def_action;
+
+#define VAR_SMTPD_POLICY_CONTEXT	"smtpd_policy_service_policy_context"
+#define DEF_SMTPD_POLICY_CONTEXT	""
+extern char *var_smtpd_policy_context;
 
 #define CHECK_POLICY_SERVICE		"check_policy_service"
 
@@ -2851,6 +3104,10 @@ extern int var_smtpd_crcpt_limit;
 #define VAR_SMTPD_CNTLS_LIMIT		"smtpd_client_new_tls_session_rate_limit"
 #define DEF_SMTPD_CNTLS_LIMIT		0
 extern int var_smtpd_cntls_limit;
+
+#define VAR_SMTPD_CAUTH_LIMIT		"smtpd_client_auth_rate_limit"
+#define DEF_SMTPD_CAUTH_LIMIT		0
+extern int var_smtpd_cauth_limit;
 
 #define VAR_SMTPD_HOGGERS		"smtpd_client_event_limit_exceptions"
 #define DEF_SMTPD_HOGGERS		"${smtpd_client_connection_limit_exceptions:$" VAR_MYNETWORKS "}"
@@ -2976,36 +3233,59 @@ extern bool var_smtp_cname_overr;
  /*
   * TLS cipherlists
   */
-#ifdef USE_TLS
-#include <openssl/opensslv.h>
-#if OPENSSL_VERSION_NUMBER >= 0x1000000fL
-#define PREFER_aNULL "aNULL:-aNULL:"
-#else
-#define PREFER_aNULL ""
-#endif
-#else
-#define PREFER_aNULL ""
-#endif
-
 #define VAR_TLS_HIGH_CLIST	"tls_high_cipherlist"
-#define DEF_TLS_HIGH_CLIST	PREFER_aNULL "ALL:!EXPORT:!LOW:!MEDIUM:+RC4:@STRENGTH"
+#define DEF_TLS_HIGH_CLIST	"aNULL:-aNULL:HIGH:@STRENGTH"
 extern char *var_tls_high_clist;
 
 #define VAR_TLS_MEDIUM_CLIST	"tls_medium_cipherlist"
-#define DEF_TLS_MEDIUM_CLIST	PREFER_aNULL "ALL:!EXPORT:!LOW:+RC4:@STRENGTH"
+#define DEF_TLS_MEDIUM_CLIST	"aNULL:-aNULL:HIGH:MEDIUM:+RC4:@STRENGTH"
 extern char *var_tls_medium_clist;
 
 #define VAR_TLS_LOW_CLIST	"tls_low_cipherlist"
-#define DEF_TLS_LOW_CLIST	PREFER_aNULL "ALL:!EXPORT:+RC4:@STRENGTH"
+#define DEF_TLS_LOW_CLIST	"aNULL:-aNULL:HIGH:MEDIUM:LOW:+RC4:@STRENGTH"
 extern char *var_tls_low_clist;
 
 #define VAR_TLS_EXPORT_CLIST	"tls_export_cipherlist"
-#define DEF_TLS_EXPORT_CLIST	PREFER_aNULL "ALL:+RC4:@STRENGTH"
+#define DEF_TLS_EXPORT_CLIST	"aNULL:-aNULL:HIGH:MEDIUM:LOW:EXPORT:+RC4:@STRENGTH"
 extern char *var_tls_export_clist;
 
 #define VAR_TLS_NULL_CLIST	"tls_null_cipherlist"
 #define DEF_TLS_NULL_CLIST	"eNULL:!aNULL"
 extern char *var_tls_null_clist;
+
+#if defined(SN_X25519) && defined(NID_X25519)
+#define DEF_TLS_EECDH_AUTO_1 SN_X25519 " "
+#else
+#define DEF_TLS_EECDH_AUTO_1 ""
+#endif
+#if defined(SN_X448) && defined(NID_X448)
+#define DEF_TLS_EECDH_AUTO_2 SN_X448 " "
+#else
+#define DEF_TLS_EECDH_AUTO_2 ""
+#endif
+#if defined(SN_X9_62_prime256v1) && defined(NID_X9_62_prime256v1)
+#define DEF_TLS_EECDH_AUTO_3 SN_X9_62_prime256v1 " "
+#else
+#define DEF_TLS_EECDH_AUTO_3 ""
+#endif
+#if defined(SN_secp521r1) && defined(NID_secp521r1)
+#define DEF_TLS_EECDH_AUTO_4 SN_secp521r1 " "
+#else
+#define DEF_TLS_EECDH_AUTO_4 ""
+#endif
+#if defined(SN_secp384r1) && defined(NID_secp384r1)
+#define DEF_TLS_EECDH_AUTO_5 SN_secp384r1
+#else
+#define DEF_TLS_EECDH_AUTO_5 ""
+#endif
+
+#define VAR_TLS_EECDH_AUTO	"tls_eecdh_auto_curves"
+#define DEF_TLS_EECDH_AUTO      DEF_TLS_EECDH_AUTO_1 \
+                                DEF_TLS_EECDH_AUTO_2 \
+                                DEF_TLS_EECDH_AUTO_3 \
+                                DEF_TLS_EECDH_AUTO_4 \
+                                DEF_TLS_EECDH_AUTO_5
+extern char *var_tls_eecdh_auto;
 
 #define VAR_TLS_EECDH_STRONG	"tls_eecdh_strong_curve"
 #define DEF_TLS_EECDH_STRONG	"prime256v1"
@@ -3019,21 +3299,43 @@ extern char *var_tls_eecdh_ultra;
 #define DEF_TLS_PREEMPT_CLIST	0
 extern bool var_tls_preempt_clist;
 
- /* The tweak for CVE-2010-4180 is needed in some versions prior to 1.0.1 */
- /* The tweak for CVE-2005-2969 is needed in some versions prior to 1.0.0 */
-#if defined(USE_TLS) && (OPENSSL_VERSION_NUMBER < 0x1000100fL)
-#if (OPENSSL_VERSION_NUMBER < 0x1000000fL)
-#define TLS_BUG_TWEAKS		"CVE-2005-2969 CVE-2010-4180"
-#else
-#define TLS_BUG_TWEAKS		"CVE-2010-4180"
-#endif
-#else
-#define TLS_BUG_TWEAKS		""
-#endif
+#define VAR_TLS_MULTI_WILDCARD	"tls_wildcard_matches_multiple_labels"
+#define DEF_TLS_MULTI_WILDCARD	1
+extern bool var_tls_multi_wildcard;
 
 #define VAR_TLS_BUG_TWEAKS	"tls_disable_workarounds"
-#define DEF_TLS_BUG_TWEAKS	TLS_BUG_TWEAKS
+#define DEF_TLS_BUG_TWEAKS	""
 extern char *var_tls_bug_tweaks;
+
+#define VAR_TLS_SSL_OPTIONS	"tls_ssl_options"
+#define DEF_TLS_SSL_OPTIONS	""
+extern char *var_tls_ssl_options;
+
+#define VAR_TLS_TKT_CIPHER	"tls_session_ticket_cipher"
+#define DEF_TLS_TKT_CIPHER	"aes-256-cbc"
+extern char *var_tls_tkt_cipher;
+
+#define VAR_TLS_BC_PKEY_FPRINT	"tls_legacy_public_key_fingerprints"
+#define DEF_TLS_BC_PKEY_FPRINT	0
+extern bool var_tls_bc_pkey_fprint;
+
+#define VAR_TLS_SERVER_SNI_MAPS "tls_server_sni_maps"
+#define DEF_TLS_SERVER_SNI_MAPS ""
+extern char *var_tls_server_sni_maps;
+
+ /*
+  * Ordered list of DANE digest algorithms.
+  */
+#define VAR_TLS_DANE_DIGESTS	"tls_dane_digests"
+#define DEF_TLS_DANE_DIGESTS	"sha512 sha256"
+extern char *var_tls_dane_digests;
+
+ /*
+  * The default is backwards-incompatible.
+  */
+#define VAR_TLS_FAST_SHUTDOWN	"tls_fast_shutdown"
+#define DEF_TLS_FAST_SHUTDOWN	1
+extern bool var_tls_fast_shutdown;
 
  /*
   * Sendmail-style mail filter support.
@@ -3041,6 +3343,12 @@ extern char *var_tls_bug_tweaks;
 #define VAR_SMTPD_MILTERS		"smtpd_milters"
 #define DEF_SMTPD_MILTERS		""
 extern char *var_smtpd_milters;
+
+#define VAR_SMTPD_MILTER_MAPS		"smtpd_milter_maps"
+#define DEF_SMTPD_MILTER_MAPS		""
+extern char *var_smtpd_milter_maps;
+
+#define SMTPD_MILTERS_DISABLE		"DISABLE"
 
 #define VAR_CLEANUP_MILTERS		"non_smtpd_milters"
 #define DEF_CLEANUP_MILTERS		""
@@ -3051,7 +3359,7 @@ extern char *var_cleanup_milters;
 extern char *var_milt_def_action;
 
 #define VAR_MILT_CONN_MACROS		"milter_connect_macros"
-#define DEF_MILT_CONN_MACROS		"j {daemon_name} v"
+#define DEF_MILT_CONN_MACROS		"j {daemon_name} {daemon_addr} v"
 extern char *var_milt_conn_macros;
 
 #define VAR_MILT_HELO_MACROS		"milter_helo_macros"
@@ -3117,6 +3425,10 @@ extern char *var_milt_v;
 #define VAR_MILT_HEAD_CHECKS		"milter_header_checks"
 #define DEF_MILT_HEAD_CHECKS		""
 extern char *var_milt_head_checks;
+
+#define VAR_MILT_MACRO_DEFLTS		"milter_macro_defaults"
+#define DEF_MILT_MACRO_DEFLTS		""
+extern char *var_milt_macro_deflts;
 
  /*
   * What internal mail do we inspect/stamp/etc.? This is not yet safe enough
@@ -3210,6 +3522,11 @@ extern bool var_conc_feedback_debug;
 #define DEF_DEST_RATE_DELAY	"0s"
 extern int var_dest_rate_delay;
 
+#define VAR_XPORT_RATE_DELAY	"default_transport_rate_delay"
+#define _XPORT_RATE_DELAY	"_transport_rate_delay"
+#define DEF_XPORT_RATE_DELAY	"0s"
+extern int var_xport_rate_delay;
+
  /*
   * Stress handling.
   */
@@ -3232,7 +3549,7 @@ extern bool var_strict_mbox_owner;
 extern int var_inet_windowsize;
 
  /*
-  * Plug-in multi-instance support. Only the first two paramaters are used by
+  * Plug-in multi-instance support. Only the first two parameters are used by
   * Postfix itself; the other ones are reserved for the instance manager.
   */
 #define VAR_MULTI_CONF_DIRS	"multi_instance_directories"
@@ -3298,7 +3615,7 @@ extern int var_psc_cache_ret;
 extern int var_psc_cache_scan;
 
 #define VAR_PSC_GREET_WAIT	"postscreen_greet_wait"
-#define DEF_PSC_GREET_WAIT	"${stress?2}${stress:6}s"
+#define DEF_PSC_GREET_WAIT	"${stress?{2}:{6}}s"
 extern int var_psc_greet_wait;
 
 #define VAR_PSC_PREGR_BANNER	"postscreen_greet_banner"
@@ -3325,6 +3642,10 @@ extern char *var_psc_dnsbl_sites;
 #define DEF_PSC_DNSBL_THRESH	1
 extern int var_psc_dnsbl_thresh;
 
+#define VAR_PSC_DNSBL_WTHRESH	"postscreen_dnsbl_whitelist_threshold"
+#define DEF_PSC_DNSBL_WTHRESH	0
+extern int var_psc_dnsbl_wthresh;
+
 #define VAR_PSC_DNSBL_ENABLE	"postscreen_dnsbl_enable"
 #define DEF_PSC_DNSBL_ENABLE	0
 extern char *var_psc_dnsbl_enable;
@@ -3333,13 +3654,21 @@ extern char *var_psc_dnsbl_enable;
 #define DEF_PSC_DNSBL_ACTION	"ignore"
 extern char *var_psc_dnsbl_action;
 
-#define VAR_PSC_DNSBL_TTL	"postscreen_dnsbl_ttl"
-#define DEF_PSC_DNSBL_TTL	"1h"
-extern int var_psc_dnsbl_ttl;
+#define VAR_PSC_DNSBL_MIN_TTL	"postscreen_dnsbl_min_ttl"
+#define DEF_PSC_DNSBL_MIN_TTL	"60s"
+extern int var_psc_dnsbl_min_ttl;
+
+#define VAR_PSC_DNSBL_MAX_TTL	"postscreen_dnsbl_max_ttl"
+#define DEF_PSC_DNSBL_MAX_TTL	"${postscreen_dnsbl_ttl?{$postscreen_dnsbl_ttl}:{1}}h"
+extern int var_psc_dnsbl_max_ttl;
 
 #define	VAR_PSC_DNSBL_REPLY	"postscreen_dnsbl_reply_map"
 #define	DEF_PSC_DNSBL_REPLY	""
 extern char *var_psc_dnsbl_reply;
+
+#define VAR_PSC_DNSBL_TMOUT	"postscreen_dnsbl_timeout"
+#define DEF_PSC_DNSBL_TMOUT	"10s"
+extern int var_psc_dnsbl_tmout;
 
 #define VAR_PSC_PIPEL_ENABLE	"postscreen_pipelining_enable"
 #define DEF_PSC_PIPEL_ENABLE	0
@@ -3377,14 +3706,6 @@ extern char *var_psc_barlf_action;
 #define DEF_PSC_BARLF_TTL	"30d"
 extern int var_psc_barlf_ttl;
 
-#define VAR_PSC_WLIST_NETS	"postscreen_whitelist_networks"
-#define DEF_PSC_WLIST_NETS	"$" VAR_MYNETWORKS
-extern char *var_psc_wlist_nets;
-
-#define VAR_PSC_BLIST_NETS	"postscreen_blacklist_networks"
-#define DEF_PSC_BLIST_NETS	""
-extern char *var_psc_blist_nets;
-
 #define VAR_PSC_BLIST_ACTION	"postscreen_blacklist_action"
 #define DEF_PSC_BLIST_ACTION	"ignore"
 extern char *var_psc_blist_nets;
@@ -3395,7 +3716,7 @@ extern int var_psc_cmd_count;
 
 #define VAR_PSC_CMD_TIME		"postscreen_command_time_limit"
 #define DEF_PSC_CMD_TIME		DEF_SMTPD_TMOUT
-extern char *var_psc_cmd_time;
+extern int var_psc_cmd_time;
 
 #define VAR_PSC_WATCHDOG		"postscreen_watchdog_timeout"
 #define DEF_PSC_WATCHDOG		"10s"
@@ -3441,6 +3762,10 @@ extern int var_psc_cconn_limit;
 #define DEF_PSC_REJ_FOOTER	"$" VAR_SMTPD_REJ_FOOTER
 extern char *var_psc_rej_footer;
 
+#define VAR_PSC_REJ_FTR_MAPS	"postscreen_reject_footer_maps"
+#define DEF_PSC_REJ_FTR_MAPS	"$" VAR_SMTPD_REJ_FTR_MAPS
+extern char *var_psc_rej_ftr_maps;
+
 #define VAR_PSC_EXP_FILTER	"postscreen_expansion_filter"
 #define DEF_PSC_EXP_FILTER	"$" VAR_SMTPD_EXP_FILTER
 extern char *var_psc_exp_filter;
@@ -3456,6 +3781,16 @@ extern char *var_psc_acl;
 #define VAR_PSC_WLIST_IF	"postscreen_whitelist_interfaces"
 #define DEF_PSC_WLIST_IF	"static:all"
 extern char *var_psc_wlist_if;
+
+#define NOPROXY_PROTO_NAME	""
+
+#define VAR_PSC_UPROXY_PROTO	"postscreen_upstream_proxy_protocol"
+#define DEF_PSC_UPROXY_PROTO	NOPROXY_PROTO_NAME
+extern char *var_psc_uproxy_proto;
+
+#define VAR_PSC_UPROXY_TMOUT	"postscreen_upstream_proxy_timeout"
+#define DEF_PSC_UPROXY_TMOUT	"5s"
+extern int var_psc_uproxy_tmout;
 
 #define VAR_DNSBLOG_SERVICE	"dnsblog_service_name"
 #define DEF_DNSBLOG_SERVICE	MAIL_SERVICE_DNSBLOG
@@ -3496,6 +3831,10 @@ extern bool var_tlsp_tls_req_ccert;
 #define VAR_TLSP_TLS_CCERT_VD	"tlsproxy_tls_ccert_verifydepth"
 #define DEF_TLSP_TLS_CCERT_VD	"$" VAR_SMTPD_TLS_CCERT_VD
 extern int var_tlsp_tls_ccert_vd;
+
+#define VAR_TLSP_TLS_CHAIN_FILES	"tlsproxy_tls_chain_files"
+#define DEF_TLSP_TLS_CHAIN_FILES	"$" VAR_SMTPD_TLS_CHAIN_FILES
+extern char *var_tlsp_tls_chain_files;
 
 #define VAR_TLSP_TLS_CERT_FILE	"tlsproxy_tls_cert_file"
 #define DEF_TLSP_TLS_CERT_FILE	"$" VAR_SMTPD_TLS_CERT_FILE
@@ -3580,17 +3919,84 @@ extern char *var_tlsp_tls_loglevel;
 #define DEF_TLSP_TLS_RECHEAD	"$" VAR_SMTPD_TLS_RECHEAD
 extern bool var_tlsp_tls_received_header;
 
-#define VAR_TLSP_TLS_SCACHE_DB	"tlsproxy_tls_session_cache_database"
-#define DEF_TLSP_TLS_SCACHE_DB	"$" VAR_SMTPD_TLS_SCACHE_DB
-extern char *var_tlsp_tls_scache_db;
-
-#define VAR_TLSP_TLS_SCACHTIME	"tlsproxy_tls_session_cache_timeout"
-#define DEF_TLSP_TLS_SCACHTIME	"$" VAR_SMTPD_TLS_SCACHTIME
-extern int var_tlsp_tls_scache_timeout;
-
 #define VAR_TLSP_TLS_SET_SESSID	"tlsproxy_tls_always_issue_session_ids"
 #define DEF_TLSP_TLS_SET_SESSID	"$" VAR_SMTPD_TLS_SET_SESSID
 extern bool var_tlsp_tls_set_sessid;
+
+ /*
+  * Workaround for tlsproxy(8) pre-jail client certs/keys access.
+  */
+#define VAR_TLSP_CLNT_LOGLEVEL		"tlsproxy_client_loglevel"
+#define DEF_TLSP_CLNT_LOGLEVEL		"$" VAR_SMTP_TLS_LOGLEVEL
+extern char *var_tlsp_clnt_loglevel;
+
+#define VAR_TLSP_CLNT_LOGPARAM		"tlsproxy_client_loglevel_parameter"
+#define DEF_TLSP_CLNT_LOGPARAM		VAR_SMTP_TLS_LOGLEVEL
+extern char *var_tlsp_clnt_logparam;
+
+#define VAR_TLSP_CLNT_SCERT_VD		"tlsproxy_client_scert_verifydepth"
+#define DEF_TLSP_CLNT_SCERT_VD		"$" VAR_SMTP_TLS_SCERT_VD
+extern int var_tlsp_clnt_scert_vd;
+
+#define VAR_TLSP_CLNT_CHAIN_FILES	"tlsproxy_client_chain_files"
+#define DEF_TLSP_CLNT_CHAIN_FILES	"$" VAR_SMTP_TLS_CHAIN_FILES
+extern char *var_tlsp_clnt_chain_files;
+
+#define VAR_TLSP_CLNT_CERT_FILE		"tlsproxy_client_cert_file"
+#define DEF_TLSP_CLNT_CERT_FILE		"$" VAR_SMTP_TLS_CERT_FILE
+extern char *var_tlsp_clnt_cert_file;
+
+#define VAR_TLSP_CLNT_KEY_FILE		"tlsproxy_client_key_file"
+#define DEF_TLSP_CLNT_KEY_FILE		"$" VAR_SMTP_TLS_KEY_FILE
+extern char *var_tlsp_clnt_key_file;
+
+#define VAR_TLSP_CLNT_DCERT_FILE	"tlsproxy_client_dcert_file"
+#define DEF_TLSP_CLNT_DCERT_FILE	"$" VAR_SMTP_TLS_DCERT_FILE
+extern char *var_tlsp_clnt_dcert_file;
+
+#define VAR_TLSP_CLNT_DKEY_FILE		"tlsproxy_client_dkey_file"
+#define DEF_TLSP_CLNT_DKEY_FILE		"$" VAR_SMTP_TLS_DKEY_FILE
+extern char *var_tlsp_clnt_dkey_file;
+
+#define VAR_TLSP_CLNT_ECCERT_FILE	"tlsproxy_client_eccert_file"
+#define DEF_TLSP_CLNT_ECCERT_FILE	"$" VAR_SMTP_TLS_ECCERT_FILE
+extern char *var_tlsp_clnt_eccert_file;
+
+#define VAR_TLSP_CLNT_ECKEY_FILE	"tlsproxy_client_eckey_file"
+#define DEF_TLSP_CLNT_ECKEY_FILE	"$" VAR_SMTP_TLS_ECKEY_FILE
+extern char *var_tlsp_clnt_eckey_file;
+
+#define VAR_TLSP_CLNT_CAFILE		"tlsproxy_client_CAfile"
+#define DEF_TLSP_CLNT_CAFILE		"$" VAR_SMTP_TLS_CA_FILE
+extern char *var_tlsp_clnt_CAfile;
+
+#define VAR_TLSP_CLNT_CAPATH		"tlsproxy_client_CApath"
+#define DEF_TLSP_CLNT_CAPATH		"$" VAR_SMTP_TLS_CA_PATH
+extern char *var_tlsp_clnt_CApath;
+
+#define VAR_TLSP_CLNT_FPT_DGST		"tlsproxy_client_fingerprint_digest"
+#define DEF_TLSP_CLNT_FPT_DGST		"$" VAR_SMTP_TLS_FPT_DGST
+extern char *var_tlsp_clnt_fpt_dgst;
+
+#define VAR_TLSP_CLNT_USE_TLS		"tlsproxy_client_use_tls"
+#define DEF_TLSP_CLNT_USE_TLS		"$" VAR_SMTP_USE_TLS
+bool    var_tlsp_clnt_use_tls;
+
+#define VAR_TLSP_CLNT_ENFORCE_TLS	"tlsproxy_client_enforce_tls"
+#define DEF_TLSP_CLNT_ENFORCE_TLS	"$" VAR_SMTP_ENFORCE_TLS
+bool    var_tlsp_clnt_enforce_tls;
+
+#define VAR_TLSP_CLNT_LEVEL		"tlsproxy_client_level"
+#define DEF_TLSP_CLNT_LEVEL		"$" VAR_SMTP_TLS_LEVEL
+char   *var_tlsp_clnt_level;
+
+#define VAR_TLSP_CLNT_PER_SITE		"tlsproxy_client_per_site"
+#define DEF_TLSP_CLNT_PER_SITE		"$" VAR_SMTP_TLS_PER_SITE
+char   *var_tlsp_clnt_per_site;
+
+#define VAR_TLSP_CLNT_POLICY		"tlsproxy_client_policy"
+#define DEF_TLSP_CLNT_POLICY		"$" VAR_SMTP_TLS_POLICY
+char   *var_tlsp_clnt_policy;
 
  /*
   * SMTPD "reject" contact info.
@@ -3599,11 +4005,15 @@ extern bool var_tlsp_tls_set_sessid;
 #define DEF_SMTPD_REJ_FOOTER	""
 extern char *var_smtpd_rej_footer;
 
+#define VAR_SMTPD_REJ_FTR_MAPS	"smtpd_reject_footer_maps"
+#define DEF_SMTPD_REJ_FTR_MAPS	""
+extern char *var_smtpd_rej_ftr_maps;
+
  /*
   * Per-record time limit support.
   */
 #define VAR_SMTPD_REC_DEADLINE	"smtpd_per_record_deadline"
-#define DEF_SMTPD_REC_DEADLINE	"${stress?yes}${stress:no}"
+#define DEF_SMTPD_REC_DEADLINE	"${stress?{yes}:{no}}"
 extern bool var_smtpd_rec_deadline;
 
 #define VAR_SMTP_REC_DEADLINE	"smtp_per_record_deadline"
@@ -3611,6 +4021,24 @@ extern bool var_smtpd_rec_deadline;
 #define VAR_LMTP_REC_DEADLINE	"lmtp_per_record_deadline"
 #define DEF_LMTP_REC_DEADLINE	0
 extern bool var_smtp_rec_deadline;
+
+ /*
+  * Permit logging.
+  */
+#define VAR_SMTPD_ACL_PERM_LOG	"smtpd_log_access_permit_actions"
+#define DEF_SMTPD_ACL_PERM_LOG	""
+extern char *var_smtpd_acl_perm_log;
+
+ /*
+  * Before-smtpd proxy support.
+  */
+#define VAR_SMTPD_UPROXY_PROTO	"smtpd_upstream_proxy_protocol"
+#define DEF_SMTPD_UPROXY_PROTO	""
+extern char *var_smtpd_uproxy_proto;
+
+#define VAR_SMTPD_UPROXY_TMOUT	"smtpd_upstream_proxy_timeout"
+#define DEF_SMTPD_UPROXY_TMOUT	"5s"
+extern int var_smtpd_uproxy_tmout;
 
  /*
   * Postfix sendmail command compatibility features.
@@ -3630,6 +4058,137 @@ extern char *var_sm_fix_eol;
 #define DEF_DAEMON_OPEN_FATAL	0
 extern bool var_daemon_open_fatal;
 
+ /*
+  * Optional delivery status filter.
+  */
+#define VAR_DSN_FILTER			"default_delivery_status_filter"
+#define DEF_DSN_FILTER			""
+extern char *var_dsn_filter;
+
+#define VAR_SMTP_DSN_FILTER		"smtp_delivery_status_filter"
+#define DEF_SMTP_DSN_FILTER		"$" VAR_DSN_FILTER
+#define VAR_LMTP_DSN_FILTER		"lmtp_delivery_status_filter"
+#define DEF_LMTP_DSN_FILTER		"$" VAR_DSN_FILTER
+extern char *var_smtp_dsn_filter;
+
+#define VAR_PIPE_DSN_FILTER		"pipe_delivery_status_filter"
+#define DEF_PIPE_DSN_FILTER		"$" VAR_DSN_FILTER
+extern char *var_pipe_dsn_filter;
+
+#define VAR_VIRT_DSN_FILTER		"virtual_delivery_status_filter"
+#define DEF_VIRT_DSN_FILTER		"$" VAR_DSN_FILTER
+extern char *var_virt_dsn_filter;
+
+#define VAR_LOCAL_DSN_FILTER		"local_delivery_status_filter"
+#define DEF_LOCAL_DSN_FILTER		"$" VAR_DSN_FILTER
+extern char *var_local_dsn_filter;
+
+ /*
+  * Optional DNS reply filter.
+  */
+#define VAR_SMTP_DNS_RE_FILTER		"smtp_dns_reply_filter"
+#define DEF_SMTP_DNS_RE_FILTER		""
+#define VAR_LMTP_DNS_RE_FILTER		"lmtp_dns_reply_filter"
+#define DEF_LMTP_DNS_RE_FILTER		""
+extern char *var_smtp_dns_re_filter;
+
+#define VAR_SMTPD_DNS_RE_FILTER		"smtpd_dns_reply_filter"
+#define DEF_SMTPD_DNS_RE_FILTER		""
+extern char *var_smtpd_dns_re_filter;
+
+ /*
+  * Share TLS sessions through tlproxy(8).
+  */
+#define VAR_SMTP_TLS_CONN_REUSE		"smtp_tls_connection_reuse"
+#define DEF_SMTP_TLS_CONN_REUSE		0
+#define VAR_LMTP_TLS_CONN_REUSE		"lmtp_tls_connection_reuse"
+#define DEF_LMTP_TLS_CONN_REUSE		0
+extern bool var_smtp_tls_conn_reuse;
+
+ /*
+  * Location of shared-library files.
+  * 
+  * If the files will be installed into a known directory, such as a directory
+  * that is processed with the ldconfig(1) command, then the shlib_directory
+  * parameter may be configured at installation time.
+  * 
+  * Otherwise, the shlib_directory parameter must be specified at compile time,
+  * and it cannot be changed afterwards.
+  */
+#define VAR_SHLIB_DIR	"shlib_directory"
+#ifndef DEF_SHLIB_DIR
+#define DEF_SHLIB_DIR	"/usr/lib/postfix"
+#endif
+extern char *var_shlib_dir;
+
+#define VAR_META_DIR	"meta_directory"
+#ifndef DEF_META_DIR
+#define DEF_META_DIR	DEF_CONFIG_DIR
+#endif
+extern char *var_meta_dir;
+
+ /*
+  * SMTPUTF8 support.
+  */
+#define VAR_SMTPUTF8_ENABLE		"smtputf8_enable"
+#ifndef DEF_SMTPUTF8_ENABLE
+#define DEF_SMTPUTF8_ENABLE		"${{$compatibility_level} < {1} ? " \
+					"{no} : {yes}}"
+#endif
+extern int var_smtputf8_enable;
+
+#define VAR_STRICT_SMTPUTF8		"strict_smtputf8"
+#define DEF_STRICT_SMTPUTF8		0
+extern int var_strict_smtputf8;
+
+#define VAR_SMTPUTF8_AUTOCLASS		"smtputf8_autodetect_classes"
+#define DEF_SMTPUTF8_AUTOCLASS		MAIL_SRC_NAME_SENDMAIL ", " \
+					MAIL_SRC_NAME_VERIFY
+extern char *var_smtputf8_autoclass;
+
+#define VAR_IDNA2003_COMPAT		"enable_idna2003_compatibility"
+#define DEF_IDNA2003_COMPAT		"no"
+extern int var_idna2003_compat;
+
+ /*
+  * Workaround for future incompatibility. Our implementation of RFC 2308
+  * negative reply caching relies on the promise that res_query() and
+  * res_search() invoke res_send(), which returns the server response in an
+  * application buffer even if the requested record does not exist. If this
+  * promise is broken, we have a workaround that is good enough for DNS
+  * reputation lookups.
+  */
+#define VAR_DNS_NCACHE_TTL_FIX		"dns_ncache_ttl_fix_enable"
+#define DEF_DNS_NCACHE_TTL_FIX		0
+extern bool var_dns_ncache_ttl_fix;
+
+ /*
+  * Logging. As systems evolve over time, logging becomes more challenging.
+  */
+#define VAR_MAILLOG_FILE	"maillog_file"
+#define DEF_MAILLOG_FILE	""
+extern char *var_maillog_file;
+
+#define VAR_MAILLOG_FILE_PFXS	"maillog_file_prefixes"
+#define DEF_MAILLOG_FILE_PFXS	"/var, /dev/stdout"
+extern char *var_maillog_file_pfxs;
+
+#define VAR_MAILLOG_FILE_COMP	"maillog_file_compressor"
+#define DEF_MAILLOG_FILE_COMP	"gzip"
+extern char *var_maillog_file_comp;
+
+#define VAR_MAILLOG_FILE_STAMP	"maillog_file_rotate_suffix"
+#define DEF_MAILLOG_FILE_STAMP	"%Y%M%d-%H%M%S"
+extern char *var_maillog_file_stamp;
+
+#define VAR_POSTLOG_SERVICE	"postlog_service_name"
+#define DEF_POSTLOG_SERVICE	MAIL_SERVICE_POSTLOG
+extern char *var_postlog_service;
+
+#define VAR_POSTLOGD_WATCHDOG	"postlogd_watchdog_timeout"
+#define DEF_POSTLOGD_WATCHDOG	"10s"
+extern int var_postlogd_watchdog;
+
 /* LICENSE
 /* .ad
 /* .fi
@@ -3639,6 +4198,11 @@ extern bool var_daemon_open_fatal;
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

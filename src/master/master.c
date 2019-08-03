@@ -4,7 +4,7 @@
 /* SUMMARY
 /*	Postfix master process
 /* SYNOPSIS
-/*	\fBmaster\fR [\fB-Ddtv\fR] [\fB-c \fIconfig_dir\fR] [\fB-e \fIexit_time\fR]
+/*	\fBmaster\fR [\fB-Dditvw\fR] [\fB-c \fIconfig_dir\fR] [\fB-e \fIexit_time\fR]
 /* DESCRIPTION
 /*	The \fBmaster\fR(8) daemon is the resident process that runs Postfix
 /*	daemons on demand: daemons to send or receive messages via the
@@ -37,6 +37,18 @@
 /* .IP "\fB-e \fIexit_time\fR"
 /*	Terminate the master process after \fIexit_time\fR seconds. Child
 /*	processes terminate at their convenience.
+/* .IP \fB-i\fR
+/*	Enable \fBinit\fR mode: do not become a session or process
+/*	group leader; and similar to \fB-s\fR, do not redirect stdout
+/*	to /dev/null, so that "maillog_file = /dev/stdout" works.
+/*	This mode is allowed only if the process ID equals 1.
+/* .sp
+/*	This feature is available in Postfix 3.3 and later.
+/* .IP \fB-s\fR
+/*	Do not redirect stdout to /dev/null, so that "maillog_file
+/*	= /dev/stdout" works.
+/* .sp
+/*	This feature is available in Postfix 3.4 and later.
 /* .IP \fB-t\fR
 /*	Test mode. Return a zero exit status when the \fBmaster.pid\fR lock
 /*	file does not exist or when that file is not locked.  This is evidence
@@ -45,6 +57,14 @@
 /*	Enable verbose logging for debugging purposes. This option
 /*	is passed on to child processes. Multiple \fB-v\fR options
 /*	make the software increasingly verbose.
+/* .IP \fB-w\fR
+/*	Wait in a dummy foreground process, while the real master
+/*	daemon initializes in a background process.  The dummy
+/*	foreground process returns a zero exit status only if the
+/*	master daemon initialization is successful, and if it
+/*	completes in a reasonable amount of time.
+/* .sp
+/*	This feature is available in Postfix 2.10 and later.
 /* .PP
 /*	Signals:
 /* .IP \fBSIGHUP\fR
@@ -63,7 +83,10 @@
 /*	terminate only the master ("\fBpostfix stop\fR") and allow running
 /*	processes to finish what they are doing.
 /* DIAGNOSTICS
-/*	Problems are reported to \fBsyslogd\fR(8).
+/*	Problems are reported to \fBsyslogd\fR(8) or \fBpostlogd\fR(8).
+/*	The exit status
+/*	is non-zero in case of problems, including problems while
+/*	initializing as a master daemon process in the background.
 /* ENVIRONMENT
 /* .ad
 /* .fi
@@ -118,8 +141,9 @@
 /*	The Internet protocols Postfix will attempt to use when making
 /*	or accepting connections.
 /* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
-/*	The list of environment parameters that a Postfix process will
-/*	import from a non-Postfix parent process.
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBmail_owner (postfix)\fR"
 /*	The UNIX system account that owns the Postfix queue and most Postfix
 /*	daemon processes.
@@ -132,8 +156,12 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Available in Postfix 3.3 and later:
+/* .IP "\fBservice_name (read-only)\fR"
+/*	The master.cf service name of a Postfix daemon process.
 /* FILES
 /* .ad
 /* .fi
@@ -151,6 +179,7 @@
 /*	verify(8), address verification
 /*	master(5), master.cf configuration file syntax
 /*	postconf(5), main.cf configuration file syntax
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* LICENSE
 /* .ad
@@ -161,13 +190,17 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System libraries. */
 
 #include <sys_defs.h>
 #include <sys/stat.h>
-#include <syslog.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -179,7 +212,6 @@
 
 #include <events.h>
 #include <msg.h>
-#include <msg_syslog.h>
 #include <vstring.h>
 #include <mymalloc.h>
 #include <iostuff.h>
@@ -202,16 +234,19 @@
 #include <mail_conf.h>
 #include <open_lock.h>
 #include <inet_proto.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Application-specific. */
 
 #include "master.h"
 
 int     master_detach = 1;
+int     init_mode = 0;
 
 /* master_exit_event - exit for memory leak testing purposes */
 
-static void master_exit_event(int unused_event, char *unused_context)
+static void master_exit_event(int unused_event, void *unused_context)
 {
     msg_info("master exit time has arrived");
     exit(0);
@@ -221,7 +256,7 @@ static void master_exit_event(int unused_event, char *unused_context)
 
 static NORETURN usage(const char *me)
 {
-    msg_fatal("usage: %s [-c config_dir] [-D (debug)] [-d (don't detach from terminal)] [-e exit_time] [-t (test)] [-v]", me);
+    msg_fatal("usage: %s [-c config_dir] [-D (debug)] [-d (don't detach from terminal)] [-e exit_time] [-t (test)] [-v] [-w (wait for initialization)]", me);
 }
 
 MAIL_VERSION_STAMP_DECLARE;
@@ -236,6 +271,7 @@ int     main(int argc, char **argv)
     VSTRING *data_lock_path;
     off_t   inherited_limit;
     int     debug_me = 0;
+    int     keep_stdout = 0;
     int     ch;
     int     fd;
     int     n;
@@ -243,6 +279,8 @@ int     main(int argc, char **argv)
     VSTRING *why;
     WATCHDOG *watchdog;
     ARGV   *import_env;
+    int     wait_flag = 0;
+    int     monitor_fd = -1;
 
     /*
      * Fingerprint executables and core dumps.
@@ -291,7 +329,8 @@ int     main(int argc, char **argv)
     /*
      * Initialize logging and exit handler.
      */
-    msg_syslog_init(mail_task(var_procname), LOG_PID, LOG_FACILITY);
+    maillog_client_init(mail_task(var_procname),
+			MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*
      * Check the Postfix library version as soon as we enable logging.
@@ -311,7 +350,7 @@ int     main(int argc, char **argv)
     /*
      * Process JCL.
      */
-    while ((ch = GETOPT(argc, argv, "c:Dde:tv")) > 0) {
+    while ((ch = GETOPT(argc, argv, "c:Dde:istvw")) > 0) {
 	switch (ch) {
 	case 'c':
 	    if (setenv(CONF_ENV_PATH, optarg, 1) < 0)
@@ -321,16 +360,28 @@ int     main(int argc, char **argv)
 	    master_detach = 0;
 	    break;
 	case 'e':
-	    event_request_timer(master_exit_event, (char *) 0, atoi(optarg));
+	    event_request_timer(master_exit_event, (void *) 0, atoi(optarg));
+	    break;
+	case 'i':
+	    if (getpid() != 1)
+		msg_fatal("-i is allowed only for PID 1 process");
+	    init_mode = 1;
+	    keep_stdout = 1;
 	    break;
 	case 'D':
 	    debug_me = 1;
+	    break;
+	case 's':
+	    keep_stdout = 1;
 	    break;
 	case 't':
 	    test_lock = 1;
 	    break;
 	case 'v':
 	    msg_verbose++;
+	    break;
+	case 'w':
+	    wait_flag = 1;
 	    break;
 	default:
 	    usage(argv[0]);
@@ -345,11 +396,33 @@ int     main(int argc, char **argv)
 	usage(argv[0]);
 
     /*
+     * Sanity check.
+     */
+    if (test_lock && wait_flag)
+	msg_fatal("the -t and -w options cannot be used together");
+    if (init_mode && (debug_me || !master_detach || wait_flag))
+	msg_fatal("the -i option cannot be used with -D, -d, or -w");
+
+    /*
+     * Run a foreground monitor process that returns an exit status of 0 when
+     * the child background process reports successful initialization as a
+     * daemon process. We use a generous limit in case main/master.cf specify
+     * symbolic hosts/ports and the naming service is slow.
+     */
+#define MASTER_INIT_TIMEOUT	100		/* keep this limit generous */
+
+    if (wait_flag)
+	monitor_fd = master_monitor(MASTER_INIT_TIMEOUT);
+
+    /*
      * If started from a terminal, get rid of any tty association. This also
      * means that all errors and warnings must go to the syslog daemon.
+     * Some new world has no terminals and prefers logging to stdout.
      */
     if (master_detach)
 	for (fd = 0; fd < 3; fd++) {
+	    if (fd == STDOUT_FILENO && keep_stdout)
+		continue;
 	    (void) close(fd);
 	    if (open("/dev/null", O_RDWR, 0) != fd)
 		msg_fatal("open /dev/null: %m");
@@ -360,7 +433,8 @@ int     main(int argc, char **argv)
      * all MTA processes cleanly. Give up if we can't separate from our
      * parent process. We're not supposed to blow away the parent.
      */
-    if (debug_me == 0 && master_detach != 0 && setsid() == -1 && getsid(0) != getpid())
+    if (init_mode == 0 && debug_me == 0 && master_detach != 0
+	&& setsid() == -1 && getsid(0) != getpid())
 	msg_fatal("unable to set session and process group ID: %m");
 
     /*
@@ -396,7 +470,7 @@ int     main(int argc, char **argv)
      * Environment import filter, to enforce consistent behavior whether
      * Postfix is started by hand, or at system boot time.
      */
-    import_env = argv_split(var_import_environ, ", \t\r\n");
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
     clean_env(import_env->argv);
     argv_free(import_env);
 
@@ -467,10 +541,18 @@ int     main(int argc, char **argv)
     master_config();
     master_sigsetup();
     master_flow_init();
-/*    msg_info("daemon started -- version %s, configuration %s",
-	     var_mail_version, var_config_dir); */
+    maillog_client_init(mail_task(var_procname),
+			MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
     msg_info("daemon started -- version %s, configuration %s, MongoDB version of https://github.com/ferraro/postfix-mongodb",
-			 var_mail_version, var_config_dir);
+             var_mail_version, var_config_dir);
+
+    /*
+     * Report successful initialization to the foreground monitor process.
+     */
+    if (monitor_fd >= 0) {
+	write(monitor_fd, "", 1);
+	(void) close(monitor_fd);
+    }
 
     /*
      * Process events. The event handler will execute the read/write/timer
@@ -481,7 +563,7 @@ int     main(int argc, char **argv)
      */
 #define MASTER_WATCHDOG_TIME	1000
 
-    watchdog = watchdog_create(MASTER_WATCHDOG_TIME, (WATCHDOG_FN) 0, (char *) 0);
+    watchdog = watchdog_create(MASTER_WATCHDOG_TIME, (WATCHDOG_FN) 0, (void *) 0);
     for (;;) {
 #ifdef HAS_VOLATILE_LOCKS
 	if (myflock(vstream_fileno(lock_fp), INTERNAL_LOCK,
@@ -499,6 +581,8 @@ int     main(int argc, char **argv)
 	    master_gotsighup = 0;		/* this first */
 	    master_vars_init();			/* then this */
 	    master_refresh();			/* then this */
+	    maillog_client_init(mail_task(var_procname),
+				MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 	}
 	if (master_gotsigchld) {
 	    if (msg_verbose)

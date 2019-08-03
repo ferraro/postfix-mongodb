@@ -6,7 +6,7 @@
 # SYNOPSIS
 #	\fBpostmap -q "\fIstring\fB" "nisplus:[\fIname\fB=%s];\fIname.name.\fB"\fR
 #
-#	\fBpostmap -q - "nisplus:[\fIname\fB=%s];\fIname.name.\fB"\fR <\fIinputfile\fR
+#	\fBpostmap -q - "nisplus:[\fIname\fB=%s];\fIname.name.\fB" <\fIinputfile\fR
 # DESCRIPTION
 #	The Postfix mail system uses optional lookup tables.
 #	These tables are usually in \fBdbm\fR or \fBdb\fR format.
@@ -81,4 +81,9 @@
 #	IBM T.J. Watson Research
 #	P.O. Box 704
 #	Yorktown Heights, NY 10598, USA
+#
+#	Wietse Venema
+#	Google, Inc.
+#	111 8th Avenue
+#	New York, NY 10011, USA
 #--

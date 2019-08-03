@@ -20,7 +20,7 @@
 /*	specified with the address_verify_sender parameter.
 /*
 /*	When the address_verify_sender parameter is empty or <>,
-/*	the sender address always the empty address (i.e. always
+/*	the sender address is always the empty address (i.e. always
 /*	time-independent).
 /*
 /*	The caller must initialize the address_verify_sender and
@@ -58,15 +58,12 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifdef STRCASECMP_IN_STRINGS_H
-#include <strings.h>
-#endif
-
 /* Utility library. */
 
 #include <msg.h>
 #include <vstring.h>
 #include <events.h>
+#include <stringops.h>
 
 /* Global library */
 
@@ -221,7 +218,7 @@ const char *valid_verify_sender_addr(const char *their_addr)
 	base_len = my_at_domain - STR(time_indep_sender_buf);
     else
 	base_len = LEN(time_indep_sender_buf);
-    if (strncasecmp(STR(time_indep_sender_buf), their_addr, base_len) != 0)
+    if (strncasecmp_utf8(STR(time_indep_sender_buf), their_addr, base_len) != 0)
 	return (0);				/* sender localpart mis-match */
 
     /*
@@ -230,7 +227,8 @@ const char *valid_verify_sender_addr(const char *their_addr)
     if ((their_at_domain = strchr(their_addr, '@')) == 0 && my_at_domain != 0)
 	return (0);				/* sender domain mis-match */
     if (their_at_domain != 0
-    && (my_at_domain == 0 || strcasecmp(their_at_domain, my_at_domain) != 0))
+	&& (my_at_domain == 0
+	    || strcasecmp_utf8(their_at_domain, my_at_domain) != 0))
 	return (0);				/* sender domain mis-match */
 
     /*
@@ -297,7 +295,7 @@ int     main(int argc, char **argv)
     verify_time = time((time_t *) 0);
 
     /*
-     * Compute the current probe sender addres.
+     * Compute the current probe sender address.
      */
     verify_sender = make_verify_sender_addr();
 

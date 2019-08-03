@@ -6,10 +6,13 @@
 /* SYNOPSIS
 /*	#include <postscreen.h>
 /*
-/*	PSC_STATE *psc_new_session_state(stream, addr, port)
+/*	PSC_STATE *psc_new_session_state(stream, client_addr, client_port,
+/*						server_addr, server_port)
 /*	VSTREAM *stream;
-/*	const char *addr;
-/*	const char *port;
+/*	const char *client_addr;
+/*	const char *client_port;
+/*	const char *server_addr;
+/*	const char *server_port;
 /*
 /*	void	psc_free_session_state(state)
 /*	PSC_STATE *state;
@@ -21,6 +24,9 @@
 /*	void	PSC_ADD_SERVER_STATE(state, server_fd)
 /*	PSC_STATE *state;
 /*	int	server_fd;
+/*
+/*	void	PSC_DEL_SERVER_STATE(state)
+/*	PSC_STATE *state;
 /*
 /*	void	PSC_DEL_CLIENT_STATE(state)
 /*	PSC_STATE *state;
@@ -58,7 +64,8 @@
 /*	psc_new_session_state() creates a new session state object
 /*	for the specified client stream, and increments the
 /*	psc_check_queue_length counter.  The flags and per-test time
-/*	stamps are initialized with PSC_INIT_TESTS().  The addr and
+/*	stamps are initialized with PSC_INIT_TESTS(), or for concurrent
+/*	sessions, with PSC_INIT_TEST_FLAGS_ONLY().  The addr and
 /*	port arguments are null-terminated strings with the remote
 /*	SMTP client endpoint. The _reply members are set to
 /*	polite "try again" SMTP replies. The protocol member is set
@@ -83,6 +90,10 @@
 /*	object with the specified server file descriptor, and
 /*	increments the global psc_post_queue_length file descriptor
 /*	counter.
+/*
+/*	PSC_DEL_SERVER_STATE() closes the specified session state
+/*	object's server file descriptor, and decrements the global
+/*	psc_post_queue_length file descriptor counter.
 /*
 /*	PSC_DEL_CLIENT_STATE() updates the specified session state
 /*	object, closes the client stream, and decrements the global
@@ -112,6 +123,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -140,19 +156,21 @@
 /* psc_new_session_state - fill in connection state for event processing */
 
 PSC_STATE *psc_new_session_state(VSTREAM *stream,
-				         const char *addr,
-				         const char *port)
+				         const char *client_addr,
+				         const char *client_port,
+				         const char *server_addr,
+				         const char *server_port)
 {
     PSC_STATE *state;
-    HTABLE_INFO *ht;
 
     state = (PSC_STATE *) mymalloc(sizeof(*state));
-    PSC_INIT_TESTS(state);
     if ((state->smtp_client_stream = stream) != 0)
 	psc_check_queue_length++;
     state->smtp_server_fd = (-1);
-    state->smtp_client_addr = mystrdup(addr);
-    state->smtp_client_port = mystrdup(port);
+    state->smtp_client_addr = mystrdup(client_addr);
+    state->smtp_client_port = mystrdup(client_port);
+    state->smtp_server_addr = mystrdup(server_addr);
+    state->smtp_server_port = mystrdup(server_port);
     state->send_buf = vstring_alloc(100);
     state->test_name = "TEST NAME HERE";
     state->dnsbl_reply = 0;
@@ -166,6 +184,7 @@ PSC_STATE *psc_new_session_state(VSTREAM *stream,
     state->read_state = 0;
     state->ehlo_discard_mask = 0;		/* XXX Should be ~0 */
     state->expand_buf = 0;
+    state->where = PSC_SMTPD_CMD_CONNECT;
 
     /*
      * Update the stress level.
@@ -180,10 +199,19 @@ PSC_STATE *psc_new_session_state(VSTREAM *stream,
     /*
      * Update the per-client session count.
      */
-    if ((ht = htable_locate(psc_client_concurrency, addr)) == 0)
-	ht = htable_enter(psc_client_concurrency, addr, (char *) 0);
-    ht->value += 1;
-    state->client_concurrency = CAST_CHAR_PTR_TO_INT(ht->value);
+    if ((state->client_info = (PSC_CLIENT_INFO *)
+	 htable_find(psc_client_concurrency, client_addr)) == 0) {
+	state->client_info = (PSC_CLIENT_INFO *)
+	    mymalloc(sizeof(state->client_info[0]));
+	(void) htable_enter(psc_client_concurrency, client_addr,
+			    (void *) state->client_info);
+	PSC_INIT_TESTS(state);
+	state->client_info->concurrency = 1;
+	state->client_info->pass_new_count = 0;
+    } else {
+	PSC_INIT_TEST_FLAGS_ONLY(state);
+	state->client_info->concurrency += 1;
+    }
 
     return (state);
 }
@@ -202,22 +230,21 @@ void    psc_free_session_state(PSC_STATE *state)
 			    state->smtp_client_addr)) == 0)
 	msg_panic("%s: unknown client address: %s",
 		  myname, state->smtp_client_addr);
-    if (--(ht->value) == 0)
-	htable_delete(psc_client_concurrency, state->smtp_client_addr,
-		      (void (*) (char *)) 0);
+    if (--(state->client_info->concurrency) == 0)
+	htable_delete(psc_client_concurrency, state->smtp_client_addr, myfree);
 
     if (state->smtp_client_stream != 0) {
-	event_server_disconnect(state->smtp_client_stream);
-	psc_check_queue_length--;
+	PSC_DEL_CLIENT_STATE(state);
     }
     if (state->smtp_server_fd >= 0) {
-	close(state->smtp_server_fd);
-	psc_post_queue_length--;
+	PSC_DEL_SERVER_STATE(state);
     }
     if (state->send_buf != 0)
 	state->send_buf = vstring_free(state->send_buf);
     myfree(state->smtp_client_addr);
     myfree(state->smtp_client_port);
+    myfree(state->smtp_server_addr);
+    myfree(state->smtp_server_port);
     if (state->dnsbl_reply)
 	vstring_free(state->dnsbl_reply);
     if (state->helo_name)
@@ -228,7 +255,7 @@ void    psc_free_session_state(PSC_STATE *state)
 	vstring_free(state->cmd_buffer);
     if (state->expand_buf)
 	vstring_free(state->expand_buf);
-    myfree((char *) state);
+    myfree((void *) state);
 
     if (psc_check_queue_length < 0 || psc_post_queue_length < 0)
 	msg_panic("bad queue length: check_queue=%d, post_queue=%d",
@@ -257,9 +284,6 @@ const char *psc_print_state_flags(int flags, const char *context)
 	"HANGUP", PSC_STATE_FLAG_HANGUP,
 	/* unused */
 	"WLIST_FAIL", PSC_STATE_FLAG_WLIST_FAIL,
-
-	"PENAL_UPDATE", PSC_STATE_FLAG_PENAL_UPDATE,
-	"PENAL_FAIL", PSC_STATE_FLAG_PENAL_FAIL,
 
 	"PREGR_FAIL", PSC_STATE_FLAG_PREGR_FAIL,
 	"PREGR_PASS", PSC_STATE_FLAG_PREGR_PASS,

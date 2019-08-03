@@ -7,6 +7,12 @@
 /*	#include <smtpd.h>
 /*	#include <smtpd_chat.h>
 /*
+/*	void	smtpd_chat_pre_jail_init(void)
+/*
+/*	int	smtpd_chat_query_limit(state, limit)
+/*	SMTPD_STATE *state;
+/*	int limit;
+/*
 /*	void	smtpd_chat_query(state)
 /*	SMTPD_STATE *state;
 /*
@@ -23,12 +29,19 @@
 /*	This module implements SMTP server support for request/reply
 /*	conversations, and maintains a limited SMTP transaction log.
 /*
+/*	smtpd_chat_pre_jail_init() performs one-time initialization.
+/*
+/*	smtpd_chat_query_limit() reads a line from the client that is
+/*	at most "limit" bytes long.  A copy is appended to the SMTP
+/*	transaction log.  The return value is non-zero for a complete
+/*	line or else zero if the length limit was exceeded.
+/*
 /*	smtpd_chat_query() receives a client request and appends a copy
 /*	to the SMTP transaction log.
 /*
 /*	smtpd_chat_reply() formats a server reply, sends it to the
 /*	client, and appends a copy to the SMTP transaction log.
-/*	When soft_bounce is enabled, all 5xx (reject) reponses are
+/*	When soft_bounce is enabled, all 5xx (reject) responses are
 /*	replaced by 4xx (try again). In case of a 421 reply the
 /*	SMTPD_FLAG_HANGUP flag is set for orderly disconnect.
 /*
@@ -52,6 +65,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -81,6 +99,7 @@
 #include <mail_proto.h>
 #include <mail_params.h>
 #include <mail_addr.h>
+#include <maps.h>
 #include <post_mail.h>
 #include <mail_error.h>
 #include <smtp_reply_footer.h>
@@ -91,8 +110,31 @@
 #include "smtpd_expand.h"
 #include "smtpd_chat.h"
 
+ /*
+  * Reject footer.
+  */
+static MAPS *smtpd_rej_ftr_maps;
+
 #define STR	vstring_str
 #define LEN	VSTRING_LEN
+
+/* smtpd_chat_pre_jail_init - initialize */
+
+void    smtpd_chat_pre_jail_init(void)
+{
+    static int init_count = 0;
+
+    if (init_count++ != 0)
+	msg_panic("smtpd_chat_pre_jail_init: multiple calls");
+
+    /*
+     * SMTP server reject footer.
+     */
+    if (*var_smtpd_rej_ftr_maps)
+	smtpd_rej_ftr_maps = maps_create(VAR_SMTPD_REJ_FTR_MAPS,
+					 var_smtpd_rej_ftr_maps,
+					 DICT_FLAG_LOCK);
+}
 
 /* smtp_chat_reset - reset SMTP transaction log */
 
@@ -123,7 +165,7 @@ static void smtp_chat_append(SMTPD_STATE *state, char *direction,
 
 /* smtpd_chat_query - receive and record an SMTP request */
 
-void    smtpd_chat_query(SMTPD_STATE *state)
+int     smtpd_chat_query_limit(SMTPD_STATE *state, int limit)
 {
     int     last_char;
 
@@ -131,16 +173,17 @@ void    smtpd_chat_query(SMTPD_STATE *state)
      * We can't parse or store input that exceeds var_line_limit, so we skip
      * over it to avoid loss of synchronization.
      */
-    last_char = smtp_get(state->buffer, state->client, var_line_limit,
+    last_char = smtp_get(state->buffer, state->client, limit,
 			 SMTP_GET_FLAG_SKIP);
     smtp_chat_append(state, "In:  ", STR(state->buffer));
     if (last_char != '\n')
 	msg_warn("%s: request longer than %d: %.30s...",
-		 state->namaddr, var_line_limit,
+		 state->namaddr, limit,
 		 printable(STR(state->buffer), '?'));
 
     if (msg_verbose)
 	msg_info("< %s: %s", state->namaddr, STR(state->buffer));
+    return (last_char == '\n');
 }
 
 /* smtpd_chat_reply - format, send and record an SMTP response */
@@ -148,10 +191,21 @@ void    smtpd_chat_query(SMTPD_STATE *state)
 void    smtpd_chat_reply(SMTPD_STATE *state, const char *format,...)
 {
     va_list ap;
+
+    va_start(ap, format);
+    vsmtpd_chat_reply(state, format, ap);
+    va_end(ap);
+}
+
+/* vsmtpd_chat_reply - format, send and record an SMTP response */
+
+void    vsmtpd_chat_reply(SMTPD_STATE *state, const char *format, va_list ap)
+{
     int     delay = 0;
     char   *cp;
     char   *next;
     char   *end;
+    const char *footer;
 
     /*
      * Slow down clients that make errors. Sleep-on-anything slows down
@@ -160,15 +214,14 @@ void    smtpd_chat_reply(SMTPD_STATE *state, const char *format,...)
     if (state->error_count >= var_smtpd_soft_erlim)
 	sleep(delay = var_smtpd_err_sleep);
 
-    va_start(ap, format);
     vstring_vsprintf(state->buffer, format, ap);
-    va_end(ap);
 
-    if (*var_smtpd_rej_footer
-	&& (*(cp = STR(state->buffer)) == '4' || *cp == '5'))
-	smtp_reply_footer(state->buffer, 0, var_smtpd_rej_footer,
-			  STR(smtpd_expand_filter), smtpd_expand_lookup,
-			  (char *) state);
+    if ((*(cp = STR(state->buffer)) == '4' || *cp == '5')
+	&& ((smtpd_rej_ftr_maps != 0
+	     && (footer = maps_find(smtpd_rej_ftr_maps, cp, 0)) != 0)
+	    || *(footer = var_smtpd_rej_footer) != 0))
+	smtp_reply_footer(state->buffer, 0, footer, STR(smtpd_expand_filter),
+			  smtpd_expand_lookup, (void *) state);
 
     /* All 5xx replies must have a 5.xx.xx detail code. */
     for (cp = STR(state->buffer), end = cp + strlen(STR(state->buffer));;) {
@@ -227,7 +280,7 @@ void    smtpd_chat_reply(SMTPD_STATE *state, const char *format,...)
 
 /* print_line - line_wrap callback */
 
-static void print_line(const char *str, int len, int indent, char *context)
+static void print_line(const char *str, int len, int indent, void *context)
 {
     VSTREAM *notice = (VSTREAM *) context;
 
@@ -264,8 +317,8 @@ void    smtpd_chat_notify(SMTPD_STATE *state)
 
     notice = post_mail_fopen_nowait(mail_addr_double_bounce(),
 				    var_error_rcpt,
-				    INT_FILT_MASK_NOTIFY,
-				    NULL_TRACE_FLAGS, NO_QUEUE_ID);
+				    MAIL_SRC_MASK_NOTIFY, NULL_TRACE_FLAGS,
+				    SMTPUTF8_FLAG_NONE, NO_QUEUE_ID);
     if (notice == 0) {
 	msg_warn("postmaster notify: %m");
 	return;
@@ -281,7 +334,7 @@ void    smtpd_chat_notify(SMTPD_STATE *state)
     argv_terminate(state->history);
     for (cpp = state->history->argv; *cpp; cpp++)
 	line_wrap(printable(*cpp, '?'), LENGTH, INDENT, print_line,
-		  (char *) notice);
+		  (void *) notice);
     post_mail_fputs(notice, "");
     if (state->reason)
 	post_mail_fprintf(notice, "Session aborted, reason: %s", state->reason);

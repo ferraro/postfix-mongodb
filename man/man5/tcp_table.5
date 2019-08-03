@@ -8,9 +8,9 @@ Postfix client/server table lookup protocol
 .SH "SYNOPSIS"
 .na
 .nf
-\fBpostmap -q "\fIstring\fB" tcp:\fIhost:port\fR
+\fBpostmap \-q "\fIstring\fB" tcp:\fIhost:port\fR
 
-\fBpostmap -q - tcp:\fIhost:port\fR <\fIinputfile\fR
+\fBpostmap \-q \- tcp:\fIhost:port\fB <\fIinputfile\fR
 .SH DESCRIPTION
 .ad
 .fi
@@ -20,9 +20,9 @@ rewriting or mail routing. These tables are usually in
 can be directed to a TCP server.
 
 To find out what types of lookup tables your Postfix system
-supports use the "\fBpostconf -m\fR" command.
+supports use the "\fBpostconf \-m\fR" command.
 
-To test lookup tables, use the "\fBpostmap -q\fR" command as
+To test lookup tables, use the "\fBpostmap \-q\fR" command as
 described in the SYNOPSIS above.
 .SH "PROTOCOL DESCRIPTION"
 .na
@@ -41,12 +41,17 @@ Send and receive operations must complete in 100 seconds.
 .nf
 .ad
 .fi
-Each request specifies a command, a lookup key, and possibly a
-lookup result.
+The tcp_table protocol supports only the lookup request.
+The request has the following form:
 .IP "\fBget\fR SPACE \fIkey\fR NEWLINE"
 Look up data under the specified key.
-.IP "\fBput\fR SPACE \fIkey\fR SPACE \fIvalue\fR NEWLINE"
-This request is currently not implemented.
+.PP
+Postfix will not generate partial search keys such as domain
+names without one or more subdomains, network addresses
+without one or more least\-significant octets, or email
+addresses without the localpart, address extension or domain
+portion. This behavior is also found with cidr:, pcre:, and
+regexp: tables.
 .SH "REPLY FORMAT"
 .na
 .nf
@@ -56,7 +61,6 @@ Each reply specifies a status code and text. Replies must be no
 longer than 4096 characters including the newline terminator.
 .IP "\fB500\fR SPACE \fItext\fR NEWLINE"
 In case of a lookup request, the requested data does not exist.
-In case of an update request, the request was rejected.
 The text describes the nature of the problem.
 .IP "\fB400\fR SPACE \fItext\fR NEWLINE"
 This indicates an error condition. The text describes the nature of
@@ -69,7 +73,7 @@ the text contains an encoded version of the requested data.
 .nf
 .ad
 .fi
-In request and reply parameters, the character %, each non-printing
+In request and reply parameters, the character %, each non\-printing
 character, and each whitespace character must be replaced by %XX,
 where XX is the corresponding ASCII hexadecimal character value. The
 hexadecimal codes can be specified in any case (upper, lower, mixed).
@@ -83,7 +87,7 @@ is guaranteed to not contain the % or NEWLINE character.
 .ad
 .fi
 Do not use TCP lookup tables for security critical purposes.
-The client-server connection is not protected and the server
+The client\-server connection is not protected and the server
 is not authenticated.
 .SH BUGS
 .ad
@@ -122,3 +126,8 @@ Wietse Venema
 IBM T.J. Watson Research
 P.O. Box 704
 Yorktown Heights, NY 10598, USA
+
+Wietse Venema
+Google, Inc.
+111 8th Avenue
+New York, NY 10011, USA

@@ -79,7 +79,7 @@ void    qmqpd_peer_init(QMQPD_STATE *state)
     SOCKADDR_SIZE sa_length;
     INET_PROTO_INFO *proto_info = inet_proto_info();
 
-    sa = (struct sockaddr *) & ss;
+    sa = (struct sockaddr *) &ss;
     sa_length = sizeof(ss);
 
     /*
@@ -152,11 +152,13 @@ void    qmqpd_peer_init(QMQPD_STATE *state)
 	state->port = mystrdup(client_port.buf);
 
 	/*
-	 * XXX Strip off the IPv6 datalink suffix to avoid false alarms with
-	 * strict address syntax checks.
+	 * XXX Require that the infrastructure strips off the IPv6 datalink
+	 * suffix to avoid false alarms with strict address syntax checks.
 	 */
 #ifdef HAS_IPV6
-	(void) split_at(client_addr.buf, '%');
+	if (strchr(client_addr.buf, '%') != 0)
+	    msg_panic("%s: address %s has datalink suffix",
+		      myname, client_addr.buf);
 #endif
 
 	/*
@@ -186,7 +188,7 @@ void    qmqpd_peer_init(QMQPD_STATE *state)
 		sa_length = res0->ai_addrlen;
 		if (sa_length > sizeof(ss))
 		    sa_length = sizeof(ss);
-		memcpy((char *) sa, res0->ai_addr, sa_length);
+		memcpy((void *) sa, res0->ai_addr, sa_length);
 		freeaddrinfo(res0);
 	    }
 

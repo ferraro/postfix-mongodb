@@ -5,7 +5,7 @@
 /*	Postfix alias database maintenance
 /* SYNOPSIS
 /* .fi
-/*	\fBpostalias\fR [\fB-Nfinoprsvw\fR] [\fB-c \fIconfig_dir\fR]
+/*	\fBpostalias\fR [\fB-Nfinoprsuvw\fR] [\fB-c \fIconfig_dir\fR]
 /*	[\fB-d \fIkey\fR] [\fB-q \fIkey\fR]
 /*		[\fIfile_type\fR:]\fIfile_name\fR ...
 /* DESCRIPTION
@@ -79,6 +79,10 @@
 /*	found to the standard output stream. The exit status is zero
 /*	when the requested information was found.
 /*
+/*	Note: this performs a single query with the key as specified,
+/*	and does not make iterative queries with substrings of the
+/*	key as described in the aliases(5) manual page.
+/*
 /*	If a key value of \fB-\fR is specified, the program reads key
 /*	values from the standard input stream and writes one line of
 /*	\fIkey: value\fR output for each key that was found. The exit
@@ -93,6 +97,10 @@
 /*	as the original input order.
 /*	This feature is available in Postfix version 2.2 and later,
 /*	and is not available for all database types.
+/* .IP \fB-u\fR
+/*	Disable UTF-8 support. UTF-8 support is enabled by default
+/*	when "smtputf8_enable = yes". It requires that keys and
+/*	values are valid UTF-8 strings.
 /* .IP \fB-v\fR
 /*	Enable verbose logging for debugging purposes. Multiple \fB-v\fR
 /*	options make the software increasingly verbose.
@@ -139,7 +147,7 @@
 /*	The name of the alias database source file when creating a database.
 /* DIAGNOSTICS
 /*	Problems are logged to the standard error stream and to
-/*	\fBsyslogd\fR(8).  No output means that
+/*	\fBsyslogd\fR(8) or \fBpostlogd\fR(8). No output means that
 /*	no problems were detected. Duplicate entries are skipped and are
 /*	flagged with a warning.
 /*
@@ -176,11 +184,18 @@
 /* .IP "\fBdefault_database_type (see 'postconf -d' output)\fR"
 /*	The default database type for use in \fBnewaliases\fR(1), \fBpostalias\fR(1)
 /*	and \fBpostmap\fR(1) commands.
+/* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
+/* .IP "\fBsmtputf8_enable (yes)\fR"
+/*	Enable preliminary SMTPUTF8 support for the protocols described
+/*	in RFC 6531..6533.
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
 /* STANDARDS
 /*	RFC 822 (ARPA Internet Text Messages)
 /* SEE ALSO
@@ -190,6 +205,7 @@
 /*	postconf(5), configuration parameters
 /*	postmap(1), create/update/query lookup tables
 /*	newaliases(1), Sendmail compatibility interface.
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README FILES
 /* .ad
@@ -208,6 +224,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -227,13 +248,13 @@
 #include <vstring.h>
 #include <vstream.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <readlline.h>
 #include <stringops.h>
 #include <split_at.h>
 #include <vstring_vstream.h>
 #include <set_eugid.h>
 #include <warn_stat.h>
+#include <clean_env.h>
 
 /* Global library. */
 
@@ -245,10 +266,13 @@
 #include <mkmap.h>
 #include <mail_task.h>
 #include <dict_proxy.h>
+#include <mail_parm_split.h>
+#include <maillog_client.h>
 
 /* Application-specific. */
 
 #define STR	vstring_str
+#define LEN	VSTRING_LEN
 
 #define POSTALIAS_FLAG_AS_OWNER	(1<<0)	/* open dest as owner of source */
 #define POSTALIAS_FLAG_SAVE_PERM	(1<<1)	/* copy access permission
@@ -259,10 +283,11 @@
 static void postalias(char *map_type, char *path_name, int postalias_flags,
 		              int open_flags, int dict_flags)
 {
-    VSTREAM *source_fp;
+    VSTREAM *NOCLOBBER source_fp;
     VSTRING *line_buffer;
     MKMAP  *mkmap;
     int     lineno;
+    int     last_line;
     VSTRING *key_buffer;
     VSTRING *value_buffer;
     TOK822 *tok_list;
@@ -279,12 +304,16 @@ static void postalias(char *map_type, char *path_name, int postalias_flags,
     key_buffer = vstring_alloc(100);
     value_buffer = vstring_alloc(100);
     if ((open_flags & O_TRUNC) == 0) {
+	/* Incremental mode. */
 	source_fp = VSTREAM_IN;
-	vstream_control(source_fp, VSTREAM_CTL_PATH, "stdin", VSTREAM_CTL_END);
-    } else if (strcmp(map_type, DICT_TYPE_PROXY) == 0) {
-	msg_fatal("can't create maps via the proxy service");
-    } else if ((source_fp = vstream_fopen(path_name, O_RDONLY, 0)) == 0) {
-	msg_fatal("open %s: %m", path_name);
+	vstream_control(source_fp, CA_VSTREAM_CTL_PATH("stdin"), CA_VSTREAM_CTL_END);
+    } else {
+	/* Create database. */
+	if (strcmp(map_type, DICT_TYPE_PROXY) == 0)
+	    msg_fatal("can't create maps via the proxy service");
+	dict_flags |= DICT_FLAG_BULK_UPDATE;
+	if ((source_fp = vstream_fopen(path_name, O_RDONLY, 0)) == 0)
+	    msg_fatal("open %s: %m", path_name);
     }
     if (fstat(vstream_fileno(source_fp), &st) < 0)
 	msg_fatal("fstat %s: %m", path_name);
@@ -304,7 +333,6 @@ static void postalias(char *map_type, char *path_name, int postalias_flags,
 	&& (st.st_uid != geteuid() || st.st_gid != getegid()))
 	set_eugid(st.st_uid, st.st_gid);
 
-
     /*
      * Open the database, create it when it does not exist, truncate it when
      * it does exist, and lock out any spectators.
@@ -318,72 +346,97 @@ static void postalias(char *map_type, char *path_name, int postalias_flags,
 	umask(saved_mask);
 
     /*
-     * Add records to the database.
+     * Trap "exceptions" so that we can restart a bulk-mode update after a
+     * recoverable error.
      */
-    lineno = 0;
-    while (readlline(line_buffer, source_fp, &lineno)) {
+    for (;;) {
+	if (dict_isjmp(mkmap->dict) != 0
+	    && dict_setjmp(mkmap->dict) != 0
+	    && vstream_fseek(source_fp, SEEK_SET, 0) < 0)
+	    msg_fatal("seek %s: %m", VSTREAM_PATH(source_fp));
 
 	/*
-	 * Tokenize the input, so that we do the right thing when a quoted
-	 * localpart contains special characters such as "@", ":" and so on.
+	 * Add records to the database.
 	 */
-	if ((tok_list = tok822_scan(STR(line_buffer), (TOK822 **) 0)) == 0)
-	    continue;
+	last_line = 0;
+	while (readllines(line_buffer, source_fp, &last_line, &lineno)) {
 
-	/*
-	 * Enforce the key:value format. Disallow missing keys, multi-address
-	 * keys, or missing values. In order to specify an empty string or
-	 * value, enclose it in double quotes.
-	 */
-	if ((colon = tok822_find_type(tok_list, ':')) == 0
-	    || colon->prev == 0 || colon->next == 0
-	    || tok822_rfind_type(colon, ',')) {
-	    msg_warn("%s, line %d: need name:value pair",
-		     VSTREAM_PATH(source_fp), lineno);
-	    tok822_free_tree(tok_list);
-	    continue;
+	    /*
+	     * First some UTF-8 checks sans casefolding.
+	     */
+	    if ((mkmap->dict->flags & DICT_FLAG_UTF8_ACTIVE)
+		&& !allascii(STR(line_buffer))
+		&& !valid_utf8_string(STR(line_buffer), LEN(line_buffer))) {
+		msg_warn("%s, line %d: non-UTF-8 input \"%s\""
+			 " -- ignoring this line",
+			 VSTREAM_PATH(source_fp), lineno, STR(line_buffer));
+		continue;
+	    }
+
+	    /*
+	     * Tokenize the input, so that we do the right thing when a
+	     * quoted localpart contains special characters such as "@", ":"
+	     * and so on.
+	     */
+	    if ((tok_list = tok822_scan(STR(line_buffer), (TOK822 **) 0)) == 0)
+		continue;
+
+	    /*
+	     * Enforce the key:value format. Disallow missing keys,
+	     * multi-address keys, or missing values. In order to specify an
+	     * empty string or value, enclose it in double quotes.
+	     */
+	    if ((colon = tok822_find_type(tok_list, ':')) == 0
+		|| colon->prev == 0 || colon->next == 0
+		|| tok822_rfind_type(colon, ',')) {
+		msg_warn("%s, line %d: need name:value pair",
+			 VSTREAM_PATH(source_fp), lineno);
+		tok822_free_tree(tok_list);
+		continue;
+	    }
+
+	    /*
+	     * Key must be local. XXX We should use the Postfix rewriting and
+	     * resolving services to handle all address forms correctly.
+	     * However, we can't count on the mail system being up when the
+	     * alias database is being built, so we're guessing a bit.
+	     */
+	    if (tok822_rfind_type(colon, '@') || tok822_rfind_type(colon, '%')) {
+		msg_warn("%s, line %d: name must be local",
+			 VSTREAM_PATH(source_fp), lineno);
+		tok822_free_tree(tok_list);
+		continue;
+	    }
+
+	    /*
+	     * Split the input into key and value parts, and convert from
+	     * token representation back to string representation. Convert
+	     * the key to internal (unquoted) form, because the resolver
+	     * produces addresses in internal form. Convert the value to
+	     * external (quoted) form, because it will have to be re-parsed
+	     * upon lookup. Discard the token representation when done.
+	     */
+	    key_list = tok_list;
+	    tok_list = 0;
+	    value_list = tok822_cut_after(colon);
+	    tok822_unlink(colon);
+	    tok822_free(colon);
+
+	    tok822_internalize(key_buffer, key_list, TOK822_STR_DEFL);
+	    tok822_free_tree(key_list);
+
+	    tok822_externalize(value_buffer, value_list, TOK822_STR_DEFL);
+	    tok822_free_tree(value_list);
+
+	    /*
+	     * Store the value under a case-insensitive key.
+	     */
+	    mkmap_append(mkmap, STR(key_buffer), STR(value_buffer));
+	    if (mkmap->dict->error)
+		msg_fatal("table %s:%s: write error: %m",
+			  mkmap->dict->type, mkmap->dict->name);
 	}
-
-	/*
-	 * Key must be local. XXX We should use the Postfix rewriting and
-	 * resolving services to handle all address forms correctly. However,
-	 * we can't count on the mail system being up when the alias database
-	 * is being built, so we're guessing a bit.
-	 */
-	if (tok822_rfind_type(colon, '@') || tok822_rfind_type(colon, '%')) {
-	    msg_warn("%s, line %d: name must be local",
-		     VSTREAM_PATH(source_fp), lineno);
-	    tok822_free_tree(tok_list);
-	    continue;
-	}
-
-	/*
-	 * Split the input into key and value parts, and convert from token
-	 * representation back to string representation. Convert the key to
-	 * internal (unquoted) form, because the resolver produces addresses
-	 * in internal form. Convert the value to external (quoted) form,
-	 * because it will have to be re-parsed upon lookup. Discard the
-	 * token representation when done.
-	 */
-	key_list = tok_list;
-	tok_list = 0;
-	value_list = tok822_cut_after(colon);
-	tok822_unlink(colon);
-	tok822_free(colon);
-
-	tok822_internalize(key_buffer, key_list, TOK822_STR_DEFL);
-	tok822_free_tree(key_list);
-
-	tok822_externalize(value_buffer, value_list, TOK822_STR_DEFL);
-	tok822_free_tree(value_list);
-
-	/*
-	 * Store the value under a case-insensitive key.
-	 */
-	mkmap_append(mkmap, STR(key_buffer), STR(value_buffer));
-	if (mkmap->dict->error)
-	    msg_fatal("table %s:%s: write error: %m",
-		      mkmap->dict->type, mkmap->dict->name);
+	break;
     }
 
     /*
@@ -457,8 +510,8 @@ static int postalias_queries(VSTREAM *in, char **maps, const int map_count,
 	dicts[n] = 0;
 
     /*
-     * Perform all queries. Open maps on the fly, to avoid opening unecessary
-     * maps.
+     * Perform all queries. Open maps on the fly, to avoid opening
+     * unnecessary maps.
      */
     while (vstring_get_nonl(keybuf, in) != VSTREAM_EOF) {
 	for (n = 0; n < map_count; n++) {
@@ -491,7 +544,7 @@ static int postalias_queries(VSTREAM *in, char **maps, const int map_count,
     for (n = 0; n < map_count; n++)
 	if (dicts[n])
 	    dict_close(dicts[n]);
-    myfree((char *) dicts);
+    myfree((void *) dicts);
     vstring_free(keybuf);
 
     return (found);
@@ -573,7 +626,7 @@ static int postalias_deletes(VSTREAM *in, char **maps, const int map_count,
     for (n = 0; n < map_count; n++)
 	if (dicts[n])
 	    dict_close(dicts[n]);
-    myfree((char *) dicts);
+    myfree((void *) dicts);
     vstring_free(keybuf);
 
     return (found);
@@ -637,7 +690,7 @@ static void postalias_seq(const char *map_type, const char *map_name,
 
 static NORETURN usage(char *myname)
 {
-    msg_fatal("usage: %s [-Nfinoprsvw] [-c config_dir] [-d key] [-q key] [map_type:]file...",
+    msg_fatal("usage: %s [-Nfinoprsuvw] [-c config_dir] [-d key] [-q key] [map_type:]file...",
 	      myname);
 }
 
@@ -652,11 +705,13 @@ int     main(int argc, char **argv)
     struct stat st;
     int     postalias_flags = POSTALIAS_FLAG_AS_OWNER | POSTALIAS_FLAG_SAVE_PERM;
     int     open_flags = O_RDWR | O_CREAT | O_TRUNC;
-    int     dict_flags = DICT_FLAG_DUP_WARN | DICT_FLAG_FOLD_FIX;
+    int     dict_flags = (DICT_FLAG_DUP_WARN | DICT_FLAG_FOLD_FIX
+			  | DICT_FLAG_UTF8_REQUEST);
     char   *query = 0;
     char   *delkey = 0;
     int     sequence = 0;
     int     found;
+    ARGV   *import_env;
 
     /*
      * Fingerprint executables and core dumps.
@@ -686,13 +741,13 @@ int     main(int argc, char **argv)
 	msg_verbose = 1;
 
     /*
-     * Initialize. Set up logging, read the global configuration file and
-     * extract configuration information.
+     * Initialize. Set up logging. Read the global configuration file after
+     * parsing command-line arguments.
      */
     if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
 	argv[0] = slash + 1;
     msg_vstream_init(argv[0], VSTREAM_ERR);
-    msg_syslog_init(mail_task(argv[0]), LOG_PID, LOG_FACILITY);
+    maillog_client_init(mail_task(argv[0]), MAILLOG_CLIENT_FLAG_NONE);
 
     /*
      * Check the Postfix library version as soon as we enable logging.
@@ -702,7 +757,7 @@ int     main(int argc, char **argv)
     /*
      * Parse JCL.
      */
-    while ((ch = GETOPT(argc, argv, "Nc:d:finopq:rsvw")) > 0) {
+    while ((ch = GETOPT(argc, argv, "Nc:d:finopq:rsuvw")) > 0) {
 	switch (ch) {
 	default:
 	    usage(argv[0]);
@@ -750,6 +805,9 @@ int     main(int argc, char **argv)
 		msg_fatal("specify only one of -s or -q or -d");
 	    sequence = 1;
 	    break;
+	case 'u':
+	    dict_flags &= ~DICT_FLAG_UTF8_REQUEST;
+	    break;
 	case 'v':
 	    msg_verbose++;
 	    break;
@@ -760,8 +818,12 @@ int     main(int argc, char **argv)
 	}
     }
     mail_conf_read();
-    if (strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0)
-	msg_syslog_init(mail_task(argv[0]), LOG_PID, LOG_FACILITY);
+    /* Enforce consistent operation of different Postfix parts. */
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
+    update_env(import_env->argv);
+    argv_free(import_env);
+    /* Re-evaluate mail_task() after reading main.cf. */
+    maillog_client_init(mail_task(argv[0]), MAILLOG_CLIENT_FLAG_NONE);
     mail_dict_init();
 
     /*

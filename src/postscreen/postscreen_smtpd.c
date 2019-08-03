@@ -130,6 +130,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -201,8 +206,8 @@ static char *psc_smtpd_421_reply;	/* generic final_reply value */
  /*
   * Forward declaration, needed by PSC_CLEAR_EVENT_REQUEST.
   */
-static void psc_smtpd_time_event(int, char *);
-static void psc_smtpd_read_event(int, char *);
+static void psc_smtpd_time_event(int, void *);
+static void psc_smtpd_read_event(int, void *);
 
  /*
   * Encapsulation. The STARTTLS, EHLO and AUTH command handlers temporarily
@@ -215,14 +220,23 @@ static void psc_smtpd_read_event(int, char *);
 #define PSC_RESUME_SMTP_CMD_EVENTS(state) do { \
 	PSC_READ_EVENT_REQUEST2(vstream_fileno((state)->smtp_client_stream), \
 			       psc_smtpd_read_event, psc_smtpd_time_event, \
-			       (char *) (state), PSC_EFF_CMD_TIME_LIMIT); \
+			       (void *) (state), PSC_EFF_CMD_TIME_LIMIT); \
 	if (!PSC_SMTPD_BUFFER_EMPTY(state)) \
-	    psc_smtpd_read_event(EVENT_READ, (char *) state); \
+	    psc_smtpd_read_event(EVENT_READ, (void *) state); \
     } while (0)
 
 #define PSC_SUSPEND_SMTP_CMD_EVENTS(state) \
     PSC_CLEAR_EVENT_REQUEST(vstream_fileno((state)->smtp_client_stream), \
-			   psc_smtpd_time_event, (char *) (state));
+			   psc_smtpd_time_event, (void *) (state));
+
+ /*
+  * Make control characters and other non-text visible.
+  */
+#define PSC_SMTPD_ESCAPE_TEXT(dest, src, src_len, max_len) do { \
+	ssize_t _s_len = (src_len); \
+	ssize_t _m_len = (max_len); \
+	(void) escape((dest), (src), _s_len < _m_len ? _s_len : _m_len); \
+    } while (0)
 
  /*
   * Command parser support.
@@ -251,15 +265,15 @@ static DICT *psc_cmd_filter;
   */
 #define PSC_CLEAR_EVENT_DROP_SESSION_STATE(state, event, reply) do { \
 	PSC_CLEAR_EVENT_REQUEST(vstream_fileno((state)->smtp_client_stream), \
-				   (event), (char *) (state)); \
+				   (event), (void *) (state)); \
 	PSC_DROP_SESSION_STATE((state), (reply)); \
-    } while (0);
+    } while (0)
 
 #define PSC_CLEAR_EVENT_HANGUP(state, event) do { \
 	PSC_CLEAR_EVENT_REQUEST(vstream_fileno((state)->smtp_client_stream), \
-				   (event), (char *) (state)); \
+				   (event), (void *) (state)); \
 	psc_hangup_event(state); \
-    } while (0);
+    } while (0)
 
 /* psc_helo_cmd - record HELO and respond */
 
@@ -328,6 +342,11 @@ static void psc_smtpd_format_ehlo_reply(VSTRING *buf, int discard_mask
 	PSC_EHLO_APPEND(saved_len, psc_temp, "250-8BITMIME\r\n");
     if ((discard_mask & EHLO_MASK_DSN) == 0)
 	PSC_EHLO_APPEND(saved_len, psc_temp, "250-DSN\r\n");
+    /* Fix 20140708: announce SMTPUTF8. */
+    if (var_smtputf8_enable && (discard_mask & EHLO_MASK_SMTPUTF8) == 0)
+	PSC_EHLO_APPEND(saved_len, psc_temp, "250-SMTPUTF8\r\n");
+    if ((discard_mask & EHLO_MASK_CHUNKING) == 0)
+	PSC_EHLO_APPEND(saved_len, psc_temp, "250-CHUNKING\r\n");
     STR(psc_temp)[saved_len + 3] = ' ';
 }
 
@@ -380,7 +399,7 @@ static int psc_ehlo_cmd(PSC_STATE *state, char *args)
 
 /* psc_starttls_resume - resume the SMTP protocol after tlsproxy activation */
 
-static void psc_starttls_resume(int unused_event, char *context)
+static void psc_starttls_resume(int unused_event, void *context)
 {
     const char *myname = "psc_starttls_resume";
     PSC_STATE *state = (PSC_STATE *) context;
@@ -564,27 +583,61 @@ static int psc_rcpt_cmd(PSC_STATE *state, char *args)
 
 static int psc_data_cmd(PSC_STATE *state, char *args)
 {
+    const char myname[] = "psc_data_cmd";
 
     /*
-     * smtpd(8) incompatibility: we reject all requests.
+     * smtpd(8) incompatibility: postscreen(8) drops the connection, instead
+     * of waiting for the next command. Justification: postscreen(8) should
+     * never see DATA from a legitimate client, because 1) the server rejects
+     * every recipient, and 2) the server does not announce PIPELINING.
      */
     if (PSC_SMTPD_NEXT_TOKEN(args) != 0)
-	return (PSC_SEND_REPLY(state,
-			       "501 5.5.4 Syntax: DATA\r\n"));
-    if (state->sender == 0)
-	return (PSC_SEND_REPLY(state,
-			       "503 5.5.1 Error: need RCPT command\r\n"));
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+					   "501 5.5.4 Syntax: DATA\r\n");
+    else if (state->sender == 0)
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+				  "503 5.5.1 Error: need RCPT command\r\n");
+    else
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+				"554 5.5.1 Error: no valid recipients\r\n");
+    /* Caution: state is now a dangling pointer. */
+    return (0);
+}
+
+/* psc_bdat_cmd - respond to BDAT and disconnect */
+
+static int psc_bdat_cmd(PSC_STATE *state, char *args)
+{
+    const char *myname = "psc_bdat_cmd";
 
     /*
-     * We really would like to hang up the connection as early as possible,
-     * so that we dont't have to deal with broken zombies that fall silent at
-     * the first reject response. For now we rely on stress-dependent command
-     * read timeouts.
-     * 
-     * If we proceed into the data phase, enforce over-all DATA time limit.
+     * smtpd(8) incompatibility: postscreen(8) drops the connection, instead
+     * of reading the entire BDAT chunk and staying in sync with the client.
+     * Justification: postscreen(8) should never see BDAT from a legitimate
+     * client, because 1) the server rejects every recipient, and 2) the
+     * server does not announce PIPELINING.
      */
-    return (PSC_SEND_REPLY(state,
-			   "554 5.5.1 Error: no valid recipients\r\n"));
+    if (state->ehlo_discard_mask & EHLO_MASK_CHUNKING)
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+			    "502 5.5.1 Error: command not implemented\r\n");
+    else if (PSC_SMTPD_NEXT_TOKEN(args) == 0)
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+				 "501 5.5.4 Syntax: BDAT count [LAST]\r\n");
+    else if (state->sender == 0)
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+				  "554 5.5.1 Error: need RCPT command\r\n");
+    else
+	PSC_CLEAR_EVENT_DROP_SESSION_STATE(state,
+					   psc_smtpd_time_event,
+				"554 5.5.1 Error: no valid recipients\r\n");
+    /* Caution: state is now a dangling pointer. */
+    return (0);
 }
 
 /* psc_rset_cmd - reset, send 250 OK */
@@ -652,7 +705,7 @@ static int psc_quit_cmd(PSC_STATE *state, char *unused_args)
 
 /* psc_smtpd_time_event - handle per-session time limit */
 
-static void psc_smtpd_time_event(int event, char *context)
+static void psc_smtpd_time_event(int event, void *context)
 {
     const char *myname = "psc_smtpd_time_event";
     PSC_STATE *state = (PSC_STATE *) context;
@@ -664,7 +717,8 @@ static void psc_smtpd_time_event(int event, char *context)
 		 state->smtp_client_addr, state->smtp_client_port,
 		 psc_print_state_flags(state->flags, myname));
 
-    msg_info("COMMAND TIME LIMIT from [%s]:%s", PSC_CLIENT_ADDR_PORT(state));
+    msg_info("COMMAND TIME LIMIT from [%s]:%s after %s",
+	     PSC_CLIENT_ADDR_PORT(state), state->where);
     PSC_CLEAR_EVENT_DROP_SESSION_STATE(state, psc_smtpd_time_event,
 				       psc_smtpd_timeout_reply);
 }
@@ -683,6 +737,7 @@ typedef struct {
 #define PSC_SMTPD_CMD_FLAG_DESTROY	(1<<1)	/* dangling pointer alert */
 #define PSC_SMTPD_CMD_FLAG_PRE_TLS	(1<<2)	/* allowed with mandatory TLS */
 #define PSC_SMTPD_CMD_FLAG_SUSPEND	(1<<3)	/* suspend command engine */
+#define PSC_SMTPD_CMD_FLAG_HAS_PAYLOAD	(1<<4)	/* command has payload */
 
 static const PSC_SMTPD_COMMAND command_table[] = {
     "HELO", psc_helo_cmd, PSC_SMTPD_CMD_FLAG_ENABLE | PSC_SMTPD_CMD_FLAG_PRE_TLS,
@@ -693,8 +748,9 @@ static const PSC_SMTPD_COMMAND command_table[] = {
     "AUTH", psc_noop_cmd, PSC_SMTPD_CMD_FLAG_NONE,
     "MAIL", psc_mail_cmd, PSC_SMTPD_CMD_FLAG_ENABLE,
     "RCPT", psc_rcpt_cmd, PSC_SMTPD_CMD_FLAG_ENABLE,
-    "DATA", psc_data_cmd, PSC_SMTPD_CMD_FLAG_ENABLE,
+    "DATA", psc_data_cmd, PSC_SMTPD_CMD_FLAG_ENABLE | PSC_SMTPD_CMD_FLAG_DESTROY,
     /* ".", psc_dot_cmd, PSC_SMTPD_CMD_FLAG_NONE, */
+    "BDAT", psc_bdat_cmd, PSC_SMTPD_CMD_FLAG_ENABLE | PSC_SMTPD_CMD_FLAG_DESTROY | PSC_SMTPD_CMD_FLAG_HAS_PAYLOAD,
     "RSET", psc_rset_cmd, PSC_SMTPD_CMD_FLAG_ENABLE,
     "NOOP", psc_noop_cmd, PSC_SMTPD_CMD_FLAG_ENABLE | PSC_SMTPD_CMD_FLAG_PRE_TLS,
     "VRFY", psc_vrfy_cmd, PSC_SMTPD_CMD_FLAG_ENABLE,
@@ -705,16 +761,18 @@ static const PSC_SMTPD_COMMAND command_table[] = {
 
 /* psc_smtpd_read_event - pseudo responder */
 
-static void psc_smtpd_read_event(int event, char *context)
+static void psc_smtpd_read_event(int event, void *context)
 {
     const char *myname = "psc_smtpd_read_event";
     PSC_STATE *state = (PSC_STATE *) context;
+    time_t *expire_time = state->client_info->expire_time;
     int     ch;
     struct cmd_trans {
 	int     state;
 	int     want;
 	int     next_state;
     };
+    const char *saved_where;
 
 #define PSC_SMTPD_CMD_ST_ANY		0
 #define PSC_SMTPD_CMD_ST_CR		1
@@ -778,8 +836,8 @@ static void psc_smtpd_read_event(int event, char *context)
 	     */
 	    if (state->read_state == PSC_SMTPD_CMD_ST_ANY
 		&& VSTRING_LEN(state->cmd_buffer) >= var_line_limit) {
-		msg_info("COMMAND LENGTH LIMIT from [%s]:%s",
-			 PSC_CLIENT_ADDR_PORT(state));
+		msg_info("COMMAND LENGTH LIMIT from [%s]:%s after %s",
+			 PSC_CLIENT_ADDR_PORT(state), state->where);
 		PSC_CLEAR_EVENT_DROP_SESSION_STATE(state, psc_smtpd_time_event,
 						   psc_smtpd_421_reply);
 		return;
@@ -815,11 +873,13 @@ static void psc_smtpd_read_event(int event, char *context)
 	    if (ch == '\n') {
 		if ((state->flags & PSC_STATE_MASK_BARLF_TODO_SKIP)
 		    == PSC_STATE_FLAG_BARLF_TODO) {
-		    msg_info("BARE NEWLINE from [%s]:%s",
-			     PSC_CLIENT_ADDR_PORT(state));
+		    PSC_SMTPD_ESCAPE_TEXT(psc_temp, STR(state->cmd_buffer),
+				   VSTRING_LEN(state->cmd_buffer) - 1, 100);
+		    msg_info("BARE NEWLINE from [%s]:%s after %s",
+			     PSC_CLIENT_ADDR_PORT(state), STR(psc_temp));
 		    PSC_FAIL_SESSION_STATE(state, PSC_STATE_FLAG_BARLF_FAIL);
 		    PSC_UNPASS_SESSION_STATE(state, PSC_STATE_FLAG_BARLF_PASS);
-		    state->barlf_stamp = PSC_TIME_STAMP_DISABLED;	/* XXX */
+		    expire_time[PSC_TINDX_BARLF] = PSC_TIME_STAMP_DISABLED;	/* XXX */
 		    /* Skip this test for the remainder of this session. */
 		    PSC_SKIP_SESSION_STATE(state, "bare newline test",
 					   PSC_STATE_FLAG_BARLF_SKIP);
@@ -839,7 +899,7 @@ static void psc_smtpd_read_event(int event, char *context)
 			/* Temporarily whitelist until something expires. */
 			PSC_PASS_SESSION_STATE(state, "bare newline test",
 					       PSC_STATE_FLAG_BARLF_PASS);
-			state->barlf_stamp = event_time() + psc_min_ttl;
+			expire_time[PSC_TINDX_BARLF] = event_time() + psc_min_ttl;
 			break;
 		    default:
 			msg_panic("%s: unknown bare_newline action value %d",
@@ -879,7 +939,8 @@ static void psc_smtpd_read_event(int event, char *context)
 		vstring_strcpy(state->cmd_buffer, cp);
 	    } else if (psc_cmd_filter->error != 0) {
 		msg_fatal("%s:%s lookup error for \"%.100s\"",
-			  psc_cmd_filter->type, psc_cmd_filter->name, cp);
+			  psc_cmd_filter->type, psc_cmd_filter->name,
+			  STR(state->cmd_buffer));
 	    }
 	}
 
@@ -914,9 +975,14 @@ static void psc_smtpd_read_event(int event, char *context)
 	 * 
 	 * Caution: cmdp->name and cmdp->action may be null on loop exit.
 	 */
-	for (cmdp = command_table; cmdp->name != 0; cmdp++)
-	    if (strcasecmp(command, cmdp->name) == 0)
+	saved_where = state->where;
+	state->where = PSC_SMTPD_CMD_UNIMPL;
+	for (cmdp = command_table; cmdp->name != 0; cmdp++) {
+	    if (strcasecmp(command, cmdp->name) == 0) {
+		state->where = cmdp->name;
 		break;
+	    }
+	}
 
 	if ((state->flags & PSC_STATE_FLAG_SMTPD_X21)
 	    && cmdp->action != psc_quit_cmd) {
@@ -932,11 +998,14 @@ static void psc_smtpd_read_event(int event, char *context)
 		|| (*var_psc_forbid_cmds
 		    && string_list_match(psc_forbid_cmds, command)))) {
 	    printable(command, '?');
-	    msg_info("NON-SMTP COMMAND from [%s]:%s %.100s %.100s",
-		     PSC_CLIENT_ADDR_PORT(state), command, cmd_buffer_ptr);
+	    PSC_SMTPD_ESCAPE_TEXT(psc_temp, cmd_buffer_ptr,
+				  strlen(cmd_buffer_ptr), 100);
+	    msg_info("NON-SMTP COMMAND from [%s]:%s after %s: %.100s %s",
+		     PSC_CLIENT_ADDR_PORT(state), saved_where,
+		     command, STR(psc_temp));
 	    PSC_FAIL_SESSION_STATE(state, PSC_STATE_FLAG_NSMTP_FAIL);
 	    PSC_UNPASS_SESSION_STATE(state, PSC_STATE_FLAG_NSMTP_PASS);
-	    state->nsmtp_stamp = PSC_TIME_STAMP_DISABLED;	/* XXX */
+	    expire_time[PSC_TINDX_NSMTP] = PSC_TIME_STAMP_DISABLED;	/* XXX */
 	    /* Skip this test for the remainder of this SMTP session. */
 	    PSC_SKIP_SESSION_STATE(state, "non-smtp test",
 				   PSC_STATE_FLAG_NSMTP_SKIP);
@@ -956,7 +1025,7 @@ static void psc_smtpd_read_event(int event, char *context)
 		/* Temporarily whitelist until something else expires. */
 		PSC_PASS_SESSION_STATE(state, "non-smtp test",
 				       PSC_STATE_FLAG_NSMTP_PASS);
-		state->nsmtp_stamp = event_time() + psc_min_ttl;
+		expire_time[PSC_TINDX_NSMTP] = event_time() + psc_min_ttl;
 		break;
 	    default:
 		msg_panic("%s: unknown non_smtp_command action value %d",
@@ -964,17 +1033,17 @@ static void psc_smtpd_read_event(int event, char *context)
 	    }
 	}
 	/* Command PIPELINING test. */
-	if ((state->flags & PSC_STATE_MASK_PIPEL_TODO_SKIP)
+	if ((state->flags & PSC_SMTPD_CMD_FLAG_HAS_PAYLOAD) == 0
+	    && (state->flags & PSC_STATE_MASK_PIPEL_TODO_SKIP)
 	    == PSC_STATE_FLAG_PIPEL_TODO && !PSC_SMTPD_BUFFER_EMPTY(state)) {
 	    printable(command, '?');
-	    escape(psc_temp, PSC_SMTPD_PEEK_DATA(state),
-		   PSC_SMTPD_PEEK_LEN(state) < 100 ?
-		   PSC_SMTPD_PEEK_LEN(state) : 100);
+	    PSC_SMTPD_ESCAPE_TEXT(psc_temp, PSC_SMTPD_PEEK_DATA(state),
+				  PSC_SMTPD_PEEK_LEN(state), 100);
 	    msg_info("COMMAND PIPELINING from [%s]:%s after %.100s: %s",
 		     PSC_CLIENT_ADDR_PORT(state), command, STR(psc_temp));
 	    PSC_FAIL_SESSION_STATE(state, PSC_STATE_FLAG_PIPEL_FAIL);
 	    PSC_UNPASS_SESSION_STATE(state, PSC_STATE_FLAG_PIPEL_PASS);
-	    state->pipel_stamp = PSC_TIME_STAMP_DISABLED;	/* XXX */
+	    expire_time[PSC_TINDX_PIPEL] = PSC_TIME_STAMP_DISABLED;	/* XXX */
 	    /* Skip this test for the remainder of this SMTP session. */
 	    PSC_SKIP_SESSION_STATE(state, "pipelining test",
 				   PSC_STATE_FLAG_PIPEL_SKIP);
@@ -994,7 +1063,7 @@ static void psc_smtpd_read_event(int event, char *context)
 		/* Temporarily whitelist until something else expires. */
 		PSC_PASS_SESSION_STATE(state, "pipelining test",
 				       PSC_STATE_FLAG_PIPEL_PASS);
-		state->pipel_stamp = event_time() + psc_min_ttl;
+		expire_time[PSC_TINDX_PIPEL] = event_time() + psc_min_ttl;
 		break;
 	    default:
 		msg_panic("%s: unknown pipelining action value %d",
@@ -1013,28 +1082,28 @@ static void psc_smtpd_read_event(int event, char *context)
 		PSC_PASS_SESSION_STATE(state, "bare newline test",
 				       PSC_STATE_FLAG_BARLF_PASS);
 		/* XXX Reset to PSC_TIME_STAMP_DISABLED on failure. */
-		state->barlf_stamp = event_time() + var_psc_barlf_ttl;
+		expire_time[PSC_TINDX_BARLF] = event_time() + var_psc_barlf_ttl;
 	    }
 	    if ((state->flags & PSC_STATE_MASK_NSMTP_TODO_PASS_FAIL)
 		== PSC_STATE_FLAG_NSMTP_TODO) {
 		PSC_PASS_SESSION_STATE(state, "non-smtp test",
 				       PSC_STATE_FLAG_NSMTP_PASS);
 		/* XXX Reset to PSC_TIME_STAMP_DISABLED on failure. */
-		state->nsmtp_stamp = event_time() + var_psc_nsmtp_ttl;
+		expire_time[PSC_TINDX_NSMTP] = event_time() + var_psc_nsmtp_ttl;
 	    }
 	    if ((state->flags & PSC_STATE_MASK_PIPEL_TODO_PASS_FAIL)
 		== PSC_STATE_FLAG_PIPEL_TODO) {
 		PSC_PASS_SESSION_STATE(state, "pipelining test",
 				       PSC_STATE_FLAG_PIPEL_PASS);
 		/* XXX Reset to PSC_TIME_STAMP_DISABLED on failure. */
-		state->pipel_stamp = event_time() + var_psc_pipel_ttl;
+		expire_time[PSC_TINDX_PIPEL] = event_time() + var_psc_pipel_ttl;
 	    }
 	}
 	/* Command COUNT limit test. */
 	if (++state->command_count > var_psc_cmd_count
 	    && cmdp->action != psc_quit_cmd) {
-	    msg_info("COMMAND COUNT LIMIT from [%s]:%s",
-		     PSC_CLIENT_ADDR_PORT(state));
+	    msg_info("COMMAND COUNT LIMIT from [%s]:%s after %s",
+		     PSC_CLIENT_ADDR_PORT(state), saved_where);
 	    PSC_CLEAR_EVENT_DROP_SESSION_STATE(state, psc_smtpd_time_event,
 					       psc_smtpd_421_reply);
 	    return;
@@ -1073,7 +1142,7 @@ static void psc_smtpd_read_event(int event, char *context)
 	/*
 	 * Reset the command read timeout before reading the next command.
 	 */
-	event_request_timer(psc_smtpd_time_event, (char *) state,
+	event_request_timer(psc_smtpd_time_event, (void *) state,
 			    PSC_EFF_CMD_TIME_LIMIT);
 
 	/*
@@ -1130,7 +1199,7 @@ void    psc_smtpd_tests(PSC_STATE *state)
      */
     PSC_READ_EVENT_REQUEST2(vstream_fileno(state->smtp_client_stream),
 			    psc_smtpd_read_event, psc_smtpd_time_event,
-			    (char *) state, PSC_EFF_CMD_TIME_LIMIT);
+			    (void *) state, PSC_EFF_CMD_TIME_LIMIT);
 }
 
 /* psc_smtpd_init - per-process deep protocol test initialization */
@@ -1217,7 +1286,7 @@ void    psc_smtpd_init(void)
     /*
      * Initialize the reply footer.
      */
-    if (*var_psc_rej_footer)
+    if (*var_psc_rej_footer || *var_psc_rej_ftr_maps)
 	psc_expand_init();
 }
 
@@ -1245,4 +1314,10 @@ void    psc_smtpd_pre_jail_init(void)
     if (*var_psc_cmd_filter)
 	psc_cmd_filter = dict_open(var_psc_cmd_filter, O_RDONLY,
 				   DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX);
+
+    /*
+     * SMTP server reply footer.
+     */
+    if (*var_psc_rej_ftr_maps)
+	pcs_send_pre_jail_init();
 }

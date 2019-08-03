@@ -5,10 +5,29 @@
 # For common configuration examples, see BASIC_CONFIGURATION_README
 # and STANDARD_CONFIGURATION_README. To find these documents, use
 # the command "postconf html_directory readme_directory", or go to
-# http://www.postfix.org/.
+# http://www.postfix.org/BASIC_CONFIGURATION_README.html etc.
 #
 # For best results, change no more than 2-3 parameters at a time,
 # and test if Postfix still works after every change.
+
+# COMPATIBILITY
+#
+# The compatibility_level determines what default settings Postfix
+# will use for main.cf and master.cf settings. These defaults will
+# change over time.
+#
+# To avoid breaking things, Postfix will use backwards-compatible
+# default settings and log where it uses those old backwards-compatible
+# default settings, until the system administrator has determined
+# if any backwards-compatible default settings need to be made
+# permanent in main.cf or master.cf.
+#
+# When this review is complete, update the compatibility_level setting
+# below as recommended in the RELEASE_NOTES file.
+#
+# The level below is what should be used with new (not upgrade) installs.
+#
+compatibility_level = 2
 
 # SOFT BOUNCE
 #
@@ -134,8 +153,8 @@ mail_owner = postfix
 # compatible delivery agent that lookups all recipients in /etc/passwd
 # and /etc/aliases or their equivalent.
 #
-# The default is $myhostname + localhost.$mydomain.  On a mail domain
-# gateway, you should also include $mydomain.
+# The default is $myhostname + localhost.$mydomain + localhost.  On
+# a mail domain gateway, you should also include $mydomain.
 #
 # Do not specify the names of virtual domains - those domains are
 # specified elsewhere (see VIRTUAL_README).
@@ -230,7 +249,7 @@ unknown_local_recipient_reject_code = 550
 #
 # By default (mynetworks_style = subnet), Postfix "trusts" SMTP
 # clients in the same IP subnetworks as the local machine.
-# On Linux, this does works correctly only with interfaces specified
+# On Linux, this works correctly only with interfaces specified
 # with the "ifconfig" command.
 # 
 # Specify "mynetworks_style = class" when Postfix should "trust" SMTP
@@ -604,7 +623,7 @@ debugger_command =
 #	>$config_directory/$process_name.$process_id.log & sleep 5
 #
 # Another possibility is to run gdb under a detached screen session.
-# To attach to the screen sesssion, su root and run "screen -r
+# To attach to the screen session, su root and run "screen -r
 # <id_string>" where <id_string> uniquely matches one of the detached
 # sessions (from "screen -list").
 #

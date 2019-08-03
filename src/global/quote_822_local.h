@@ -27,7 +27,7 @@
 extern VSTRING *quote_822_local_flags(VSTRING *, const char *, int);
 extern VSTRING *unquote_822_local(VSTRING *, const char *);
 #define quote_822_local(dst, src) \
-	quote_822_local_flags((dst), (src), QUOTE_FLAG_8BITCLEAN)
+	quote_822_local_flags((dst), (src), QUOTE_FLAG_DEFAULT)
 
 /* LICENSE
 /* .ad
@@ -38,6 +38,11 @@ extern VSTRING *unquote_822_local(VSTRING *, const char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

@@ -61,6 +61,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -68,14 +73,11 @@
 #include <sys_defs.h>
 #include <string.h>
 
-#ifdef STRCASECMP_IN_STRINGS_H
-#include <strings.h>
-#endif
-
 /* Utility library. */
 
 #include <msg.h>
 #include <vstring.h>
+#include <stringops.h>
 
 /* Global library. */
 
@@ -103,10 +105,12 @@ int     verify_append(const char *queue_id, MSG_STATS *stats,
      * XXX vrfy_stat is competely redundant because of dsn.
      */
     if (var_verify_neg_cache || vrfy_stat == DEL_RCPT_STAT_OK) {
-	req_stat = verify_clnt_update(recipient->orig_addr, vrfy_stat,
-				      my_dsn.reason);
-	if (req_stat == VRFY_STAT_OK && strcasecmp(recipient->address,
-						 recipient->orig_addr) != 0)
+	if (recipient->orig_addr[0])
+	    req_stat = verify_clnt_update(recipient->orig_addr, vrfy_stat,
+					  my_dsn.reason);
+	/* Two verify updates for one verify request! */
+	if (req_stat == VRFY_STAT_OK
+	    && strcmp(recipient->address, recipient->orig_addr) != 0)
 	    req_stat = verify_clnt_update(recipient->address, vrfy_stat,
 					  my_dsn.reason);
     } else {

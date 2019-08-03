@@ -20,6 +20,7 @@
   * Utility library.
   */
 #include <vbuf.h>
+#include <check_arg.h>
 
  /*
   * We can't allow bare VBUFs in the interface, because VSTRINGs have a
@@ -27,12 +28,12 @@
   */
 typedef struct VSTRING {
     VBUF    vbuf;
-    ssize_t  maxlen;
 } VSTRING;
 
 extern VSTRING *vstring_alloc(ssize_t);
 extern void vstring_ctl(VSTRING *,...);
 extern VSTRING *vstring_truncate(VSTRING *, ssize_t);
+extern VSTRING *vstring_set_payload_size(VSTRING *, ssize_t);
 extern VSTRING *vstring_free(VSTRING *);
 extern VSTRING *vstring_strcpy(VSTRING *, const char *);
 extern VSTRING *vstring_strncpy(VSTRING *, const char *, ssize_t);
@@ -45,23 +46,31 @@ extern VSTRING *vstring_insert(VSTRING *, ssize_t, const char *, ssize_t);
 extern VSTRING *vstring_prepend(VSTRING *, const char *, ssize_t);
 extern VSTRING *PRINTFLIKE(2, 3) vstring_sprintf(VSTRING *, const char *,...);
 extern VSTRING *PRINTFLIKE(2, 3) vstring_sprintf_append(VSTRING *, const char *,...);
-extern VSTRING *PRINTFLIKE(2, 3) vstring_sprintf_prepend(VSTRING *, const char *, ...);
+extern VSTRING *PRINTFLIKE(2, 3) vstring_sprintf_prepend(VSTRING *, const char *,...);
 extern char *vstring_export(VSTRING *);
 extern VSTRING *vstring_import(char *);
 
-#define VSTRING_CTL_MAXLEN	1
+/* Legacy API: constant plus type-unchecked argument. */
+#define VSTRING_CTL_EXACT	2
 #define VSTRING_CTL_END		0
+
+/* Safer API: type-checked arguments. */
+#define CA_VSTRING_CTL_END		VSTRING_CTL_END
+#define CA_VSTRING_CTL_EXACT		VSTRING_CTL_EXACT
+
+CHECK_VAL_HELPER_DCL(VSTRING_CTL, ssize_t);
+
+/* Flags 24..31 are reserved for VSTRING. */
+#define VSTRING_FLAG_EXACT	(1<<24)	/* exact allocation for tests */
 
  /*
   * Macros. Unsafe macros have UPPERCASE names.
   */
-#define VSTRING_SPACE(vp, len)	((vp)->vbuf.space(&(vp)->vbuf, len))
+#define VSTRING_SPACE(vp, len)	((vp)->vbuf.space(&(vp)->vbuf, (len)))
 #define vstring_str(vp)		((char *) (vp)->vbuf.data)
 #define VSTRING_LEN(vp)		((ssize_t) ((vp)->vbuf.ptr - (vp)->vbuf.data))
 #define vstring_end(vp)		((char *) (vp)->vbuf.ptr)
 #define VSTRING_TERMINATE(vp)	do { \
-				    if ((vp)->vbuf.cnt <= 0) \
-					VSTRING_SPACE((vp),1); \
 				    *(vp)->vbuf.ptr = 0; \
 				} while (0)
 #define VSTRING_RESET(vp)	do { \
@@ -79,10 +88,12 @@ extern VSTRING *vstring_import(char *);
   * The following macro is not part of the public interface, because it can
   * really screw up a buffer by positioning past allocated memory.
   */
+#ifdef VSTRING_INTERNAL
 #define VSTRING_AT_OFFSET(vp, offset) do { \
 	(vp)->vbuf.ptr = (vp)->vbuf.data + (offset); \
 	(vp)->vbuf.cnt = (vp)->vbuf.len - (offset); \
     } while (0)
+#endif
 
 extern VSTRING *vstring_vsprintf(VSTRING *, const char *, va_list);
 extern VSTRING *vstring_vsprintf_append(VSTRING *, const char *, va_list);
@@ -103,6 +114,11 @@ extern VSTRING *vstring_vsprintf_append(VSTRING *, const char *, va_list);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

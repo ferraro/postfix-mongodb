@@ -14,7 +14,7 @@
 /*	myflock() locks or unlocks an entire open file.
 /*
 /*	In the case of a blocking request, a call that fails due to
-/*	forseeable transient problems is retried once per second.
+/*	foreseeable transient problems is retried once per second.
 /*
 /*	Arguments:
 /* .IP fd
@@ -127,7 +127,7 @@ int     myflock(int fd, int lock_style, int operation)
 		F_UNLCK, F_RDLCK, F_WRLCK
 	    };
 
-	    memset((char *) &lock, 0, sizeof(lock));
+	    memset((void *) &lock, 0, sizeof(lock));
 	    lock.l_type = lock_ops[operation & ~MYFLOCK_OP_NOWAIT];
 	    request = (operation & MYFLOCK_OP_NOWAIT) ? F_SETLK : F_SETLKW;
 	    while ((status = fcntl(fd, request, &lock)) < 0

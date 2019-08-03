@@ -7,7 +7,7 @@
 /*	#include <ctable.h>
 /*
 /*	CTABLE	*ctable_create(limit, create, delete, context)
-/*	int	limit;
+/*	ssize_t	limit;
 /*	void	*(*create)(const char *key, void *context);
 /*	void	(*delete)(void *value, void *context);
 /*	void	*context;
@@ -15,6 +15,14 @@
 /*	const void *ctable_locate(cache, key)
 /*	CTABLE	*cache;
 /*	const char *key;
+/*
+/*	const void *ctable_refresh(cache, key)
+/*	CTABLE	*cache;
+/*	const char *key;
+/*
+/*	const void *ctable_newcontext(cache, context)
+/*	CTABLE	*cache;
+/*	void	*context;
 /*
 /*	void	ctable_free(cache)
 /*	CTABLE	*cache;
@@ -33,9 +41,16 @@
 /*	specify pointers to call-back functions that create a value, given
 /*	a key, and delete a given value, respectively. The context argument
 /*	is passed on to the call-back routines.
+/*	The create() and delete() functions must not modify the cache.
 /*
 /*	ctable_locate() looks up or generates the value that corresponds to
 /*	the specified key, and returns that value.
+/*
+/*	ctable_refresh() flushes the value (if any) associated with
+/*	the specified key, and returns the same result as ctable_locate().
+/*
+/*	ctable_newcontext() updates the context that is passed on
+/*	to call-back routines.
 /*
 /*	ctable_free() destroys the specified cache, including its contents.
 /*
@@ -43,6 +58,7 @@
 /*	the action function for each cache element with the corresponding
 /*	key and value as arguments. This function is useful mainly for
 /*	cache performance debugging.
+/*	Note: the action() function must not modify the cache.
 /* DIAGNOSTICS
 /*	Fatal errors: out of memory. Panic: interface violation.
 /* LICENSE
@@ -88,8 +104,8 @@ struct ctable_entry {
 
 struct ctable {
     HTABLE *table;			/* table with key, ctable_entry pairs */
-    unsigned limit;			/* max nr of entries */
-    unsigned used;			/* current nr of entries */
+    size_t  limit;			/* max nr of entries */
+    size_t  used;			/* current nr of entries */
     CTABLE_CREATE_FN create;		/* constructor */
     CTABLE_DELETE_FN delete;		/* destructor */
     RING    ring;			/* MRU linkage */
@@ -100,14 +116,14 @@ struct ctable {
 
 /* ctable_create - create empty cache */
 
-CTABLE *ctable_create(int limit, CTABLE_CREATE_FN create,
+CTABLE *ctable_create(ssize_t limit, CTABLE_CREATE_FN create,
 		              CTABLE_DELETE_FN delete, void *context)
 {
     CTABLE *cache = (CTABLE *) mymalloc(sizeof(CTABLE));
     const char *myname = "ctable_create";
 
     if (limit < 1)
-	msg_panic("%s: bad cache limit: %d", myname, limit);
+	msg_panic("%s: bad cache limit: %ld", myname, (long) limit);
 
     cache->table = htable_create(limit);
     cache->limit = (limit < CTABLE_MIN_SIZE ? CTABLE_MIN_SIZE : limit);
@@ -139,13 +155,13 @@ const void *ctable_locate(CTABLE *cache, const char *key)
 		msg_info("%s: purge entry key %s", myname, entry->key);
 	    ring_detach(RING_PTR_OF(entry));
 	    cache->delete(entry->value, cache->context);
-	    htable_delete(cache->table, entry->key, (void (*) (char *)) 0);
+	    htable_delete(cache->table, entry->key, (void (*) (void *)) 0);
 	} else {
 	    entry = (CTABLE_ENTRY *) mymalloc(sizeof(CTABLE_ENTRY));
 	    cache->used++;
 	}
 	entry->value = cache->create(key, cache->context);
-	entry->key = htable_enter(cache->table, key, (char *) entry)->key;
+	entry->key = htable_enter(cache->table, key, (void *) entry)->key;
 	ring_append(RING_PTR_OF(cache), RING_PTR_OF(entry));
 	if (msg_verbose)
 	    msg_info("%s: install entry key %s", myname, entry->key);
@@ -161,16 +177,48 @@ const void *ctable_locate(CTABLE *cache, const char *key)
     return (entry->value);
 }
 
+/* ctable_refresh - page-in fresh data for given key */
+
+const void *ctable_refresh(CTABLE *cache, const char *key)
+{
+    const char *myname = "ctable_refresh";
+    CTABLE_ENTRY *entry;
+
+    /* Materialize entry if missing. */
+    if ((entry = (CTABLE_ENTRY *) htable_find(cache->table, key)) == 0)
+	return ctable_locate(cache, key);
+
+    /* Otherwise, refresh its content. */
+    cache->delete(entry->value, cache->context);
+    entry->value = cache->create(key, cache->context);
+
+    /* Update its MRU linkage. */
+    if (entry != RING_TO_CTABLE_ENTRY(ring_succ(RING_PTR_OF(cache)))) {
+	ring_detach(RING_PTR_OF(entry));
+	ring_append(RING_PTR_OF(cache), RING_PTR_OF(entry));
+    }
+    if (msg_verbose)
+	msg_info("%s: refresh entry key %s", myname, entry->key);
+    return (entry->value);
+}
+
+/* ctable_newcontext - update call-back context */
+
+void    ctable_newcontext(CTABLE *cache, void *context)
+{
+    cache->context = context;
+}
+
 static CTABLE *ctable_free_cache;
 
 /* ctable_free_callback - callback function */
 
-static void ctable_free_callback(char *ptr)
+static void ctable_free_callback(void *ptr)
 {
     CTABLE_ENTRY *entry = (CTABLE_ENTRY *) ptr;
 
     ctable_free_cache->delete(entry->value, ctable_free_cache->context);
-    myfree((char *) entry);
+    myfree((void *) entry);
 }
 
 /* ctable_free - destroy cache and contents */
@@ -185,7 +233,7 @@ void    ctable_free(CTABLE *cache)
      */
     ctable_free_cache = cache;
     htable_free(cache->table, ctable_free_callback);
-    myfree((char *) cache);
+    myfree((void *) cache);
     ctable_free_cache = saved_cache;
 }
 
@@ -248,7 +296,7 @@ int     main(int unused_argc, char **argv)
     data_buf = vstring_alloc(100);
     cache = ctable_create(1, ask, drop, (void *) data_buf);
     msg_verbose = 1;
-    vstream_control(VSTREAM_IN, VSTREAM_CTL_EXCEPT, VSTREAM_CTL_END);
+    vstream_control(VSTREAM_IN, CA_VSTREAM_CTL_EXCEPT, CA_VSTREAM_CTL_END);
 
     if (vstream_setjmp(VSTREAM_IN) == 0) {
 	for (;;) {

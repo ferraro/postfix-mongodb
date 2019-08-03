@@ -47,7 +47,9 @@ multiple times, for up to $max_use incoming SMTP connections. </p>
 
 <li><a href="#protocol">Policy protocol description</a>
 
-<li><a href="#client_config">Policy client/server configuration</a>
+<li><a href="#client_config">Simple policy client/server configuration</a>
+
+<li><a href="#advanced">Advanced policy client configuration</a>
 
 <li><a href="#greylist">Example: greylist policy server</a>
 
@@ -63,11 +65,14 @@ multiple times, for up to $max_use incoming SMTP connections. </p>
 
 <h2><a name="protocol">Protocol description</a></h2>
 
-<p> The Postfix policy delegation protocol is really simple. The
-client request is a sequence of name=value attributes separated by
-newline, and is terminated by an empty line. The server reply is
-one name=value attribute and it, too, is terminated by an empty
-line. </p>
+<p> The Postfix policy delegation protocol is really simple. The client
+sends a request and the server sends a response. Unless there was an
+error, the server must not close the connection, so that the same
+connection can be used multiple times. </p>
+
+<p> The client request is a sequence of name=value attributes separated
+by newline, and is terminated by an empty line. The server reply is one
+name=value attribute and it, too, is terminated by an empty line. </p>
 
 <p> Here is an example of all the attributes that the Postfix SMTP
 server sends in a delegated SMTPD access policy request: </p>
@@ -104,6 +109,13 @@ etrn_domain=
 stress=
 <b>Postfix version 2.9 and later:</b>
 ccert_pubkey_fingerprint=68:B3:29:DA:98:93:E3:40:99:C7:D8:AD:5C:B9:C9:40
+<b>Postfix version 3.0 and later:</b>
+client_port=1234
+<b>Postfix version 3.1 and later:</b>
+policy_context=submission
+<b>Postfix version 3.2 and later:</b>
+server_address=10.3.2.1
+server_port=54321
 [empty line]
 </pre>
 </blockquote>
@@ -131,16 +143,23 @@ ccert_pubkey_fingerprint=68:B3:29:DA:98:93:E3:40:99:C7:D8:AD:5C:B9:C9:40
     <li> <p> The "recipient" attribute is available in the "RCPT
     TO" stage. It is also available in the "DATA" and "END-OF-MESSAGE"
     stages if Postfix accepted only one recipient for the current
-    message.  </p>
+    message.
+    The DATA protocol state also applies to email that is received
+    with BDAT commands (Postfix 3.4 and later). </p>
 
     <li> <p> The "recipient_count" attribute (Postfix 2.3 and later)
     is non-zero only in the "DATA" and "END-OF-MESSAGE" stages. It
     specifies the number of recipients that Postfix accepted for
-    the current message.  </p>
+    the current message.
+    The DATA protocol state also applies to email that is received
+    with BDAT commands (Postfix 3.4 and later). </p>
 
-    <li> <p> The client address is an IPv4 dotted quad in the form
-    1.2.3.4 or it is an IPv6 address in the form 1:2:3::4:5:6.
-    </p>
+    <li> <p> The remote client or local server IP address is an
+    IPv4 dotted quad in the form 1.2.3.4 or it is an IPv6 address
+    in the form 1:2:3::4:5:6.  </p>
+
+    <li> <p> The remote client or local server port is a decimal
+    number in the range 0-65535.  </p>
 
     <li> <p> For a discussion of the differences between reverse
     and verified client_name information, see the
@@ -161,8 +180,7 @@ ccert_pubkey_fingerprint=68:B3:29:DA:98:93:E3:40:99:C7:D8:AD:5C:B9:C9:40
     <li> <p> The "size" attribute value specifies the message size
     that the client specified in the MAIL FROM command (zero if
     none was specified). With Postfix 2.2 and later, it specifies
-    the actual message size when the client sends the END-OF-DATA
-    command.
+    the actual message size after the client sends the END-OF-MESSAGE.
     </p>
 
     <li> <p> The "sasl_*" attributes (Postfix 2.2 and later) specify
@@ -191,6 +209,10 @@ ccert_pubkey_fingerprint=68:B3:29:DA:98:93:E3:40:99:C7:D8:AD:5C:B9:C9:40
     <li> <p> The "stress" attribute is either empty or "yes".  See
     the STRESS_README document for further information. </p>
 
+    <li> <p> The "policy_context" attribute provides a way to pass
+    information that is not available via other attributes (Postfix
+    version 3.1 and later). </p>
+
 </ul>
 
 <p> The following is specific to SMTPD delegated policy requests:
@@ -204,6 +226,8 @@ ccert_pubkey_fingerprint=68:B3:29:DA:98:93:E3:40:99:C7:D8:AD:5C:B9:C9:40
     DATA, END-OF-MESSAGE, VRFY or ETRN; these are the SMTP protocol
     states where
     the Postfix SMTP server makes an OK/REJECT/HOLD/etc. decision.
+    The DATA protocol state also applies to email that is received
+    with BDAT commands (Postfix 3.4 and later).
     </p>
 
 </ul>
@@ -227,7 +251,7 @@ the request permanently. </p>
 Instead the server must log a warning and disconnect.  Postfix will
 retry the request at some later time.  </p>
 
-<h2><a name="client_config">Policy client/server configuration</a></h2>
+<h2><a name="client_config">Simple policy client/server configuration</a></h2>
 
 <p> The Postfix delegated policy client can connect to a TCP socket
 or to a UNIX-domain socket. Examples: </p>
@@ -264,6 +288,7 @@ daemon, you would use something like this: </p>
  9         check_policy_service unix:private/policy 
 10         ...
 11     policy_time_limit = 3600
+12     # smtpd_policy_service_request_limit = 1
 </pre>
 </blockquote>
 
@@ -280,6 +305,10 @@ specified with the <b>user</b> attribute. </p>
 <li> <p> Line 2: specify a "0" process limit instead of the default
 "-", to avoid "connection refused" and other problems when you
 increase the smtpd process limit. </p>
+
+<li> <p> Line 8: reject_unauth_destination is not needed here if
+the mail relay policy is specified with smtpd_relay_restrictions
+(available with Postfix 2.10 and later). </p>
 
 <li> <p> Lines 8, 9: always specify "check_policy_service" AFTER
 "reject_unauth_destination" or else your system could become an
@@ -299,8 +328,12 @@ of a master.cf service name (in the above example, "policy") and a
 built-in suffix (in the above example: "_time_limit").  </p>
 </blockquote>
 
-<li> <p> Solaris UNIX-domain sockets do not work reliably. Use
-TCP sockets instead: </p>
+<li> <p> Line 12: specify smtpd_policy_service_request_limit to
+avoid error-recovery delays with policy servers that cannot
+maintain a persistent connection. </p>
+
+<li> <p> With Solaris &lt; 9, or Postfix &lt; 2.10 on any Solaris
+version, use TCP sockets instead of UNIX-domain sockets: </p>
 
 </ul>
 
@@ -317,13 +350,19 @@ TCP sockets instead: </p>
  9         check_policy_service inet:127.0.0.1:9998
 10         ...
 11     127.0.0.1:9998_time_limit = 3600
+12     # smtpd_policy_service_request_limit = 1
 </pre>
 </blockquote>
 
-<p> Other configuration parameters that control the client side of
-the policy delegation protocol: </p>
+<p> Configuration parameters that control the client side of the
+policy delegation protocol: </p>
 
 <ul>
+
+<li> <p> smtpd_policy_service_default_action (default: 451 4.3.5
+Server configuration problem): The default action when an SMTPD
+policy service request fails.  Available with Postfix 3.0 and
+later. </p>
 
 <li> <p> smtpd_policy_service_max_idle (default: 300s): The amount
 of time before the Postfix SMTP server closes an unused policy
@@ -333,10 +372,104 @@ client connection. </p>
 of time before the Postfix SMTP server closes an active policy
 client connection. </p>
 
+<li> <p> smtpd_policy_service_request_limit (default: 0): The maximal
+number of requests per policy connection, or zero (no limit).
+Available with Postfix 3.0 and later. </p>
+
 <li> <p> smtpd_policy_service_timeout (default: 100s): The time
 limit to connect to, send to or receive from a policy server. </p>
 
+<li> <p> smtpd_policy_service_try_limit (default: 2): The maximal
+number of attempts to send an SMTPD policy service request before
+giving up.  Available with Postfix 3.0 and later.  </p>
+
+<li> <p> smtpd_policy_service_retry_delay (default: 1s): The delay
+between attempts to resend a failed SMTPD policy service request.
+Available with Postfix 3.0 and later.  </p>
+
+<li> <p> smtpd_policy_service_policy_context (default: empty):
+Optional information that is passed in the "policy_context" attribute
+of an SMTPD policy service request (originally, to share the same
+SMTPD service endpoint among multiple check_policy_service clients).
+Available with Postfix 3.1 and later.  </p>
+
 </ul>
+
+<p> Configuration parameters that control the server side of the
+policy delegation protocol: </p>
+
+<ul>
+
+<li> <p> <i>transport</i>_time_limit ($command_time_limit): The
+maximal amount of time the policy daemon is allowed to run before
+it is terminated. The <i>transport</i> is the service name of the
+master.cf entry for the policy daemon service. In the above
+examples, the service name is "policy" or "127.0.0.1:9998". </p>
+
+</ul>
+
+<h2><a name="advanced">Advanced policy client configuration</a></h2>
+
+<p> The previous section lists a number of Postfix main.cf parameters
+that control time limits and other settings for all policy clients.
+This is sufficient for simple configurations. With more complex
+configurations it becomes desirable to have different settings per
+policy client. This is supported with Postfix 3.0 and later. </p>
+
+<p> The following example shows a "non-critical" policy service
+with a short timeout, and with "DUNNO" as default action when the
+service is unvailable. The "DUNNO" action causes Postfix to ignore
+the result. </p>
+
+<blockquote>
+<pre>
+1 /etc/postfix/main.cf:
+2     mua_recipient_restrictions = 
+3         ...
+4         reject_unauth_destination
+5         check_policy_service { inet:host:port, 
+6             timeout=10s, default_action=DUNNO
+7             policy_context=submission }
+8         ...
+</pre>
+</blockquote>
+
+<p> Instead of a server endpoint, we now have a list enclosed in {}. </p>
+
+<ul>
+
+<li> <p> Line 5: The first item in the list is the server endpoint.
+This supports the exact same "inet" and "unix" syntax as described
+earlier. </p>
+
+<li> <p> Line 6-7: The remainder of the list contains per-client
+settings. These settings override global main.cf parameters,
+and have the same name as those parameters, without the
+"smtpd_policy_service_" prefix.  </p>
+
+</ul>
+
+<p> Inside the list, syntax is similar to what we already know from
+main.cf: items separated by space or comma. There is one difference:
+<b>you must enclose a setting in parentheses, as in "{ name = value
+}", if you want to have space or comma within a value or around
+"="</b>.  This comes in handy when different policy servers require
+different default actions with different SMTP status codes or text:
+</p>
+
+<blockquote>
+<pre>
+1 /etc/postfix/main.cf:
+2     smtpd_recipient_restrictions = 
+3         ...
+4         reject_unauth_destination
+5         check_policy_service {
+6           inet:host:port1, 
+7           { default_action = 451 4.3.5 See http://www.example.com/support1 }
+8         } 
+9         ...
+</pre>
+</blockquote>
 
 <h2><a name="greylist">Example: greylist policy server</a></h2>
 
@@ -409,6 +542,7 @@ processes only: </p>
  9         reject_unauth_destination 
 10         check_policy_service unix:private/greylist
 11         ...
+12     # smtpd_policy_service_request_limit = 1
 </pre>
 </blockquote>
 
@@ -436,6 +570,10 @@ SMTP server process that talks to it.
 See the spawn(8) manpage for more information about the
 <i>transport</i>_time_limit parameter.  </p>
 
+<li> <p> Line 9: reject_unauth_destination is not needed here if
+the mail relay policy is specified with smtpd_relay_restrictions
+(available with Postfix 2.10 and later). </p>
+
 <blockquote> <p> Note: the "greylist_time_limit" parameter will not
 show up in "postconf" command output before Postfix version 2.9.
 This limitation applies to many parameters whose name is a combination
@@ -443,9 +581,14 @@ of a master.cf service name (in the above example, "greylist") and
 a built-in suffix (in the above example: "_time_limit").  </p>
 </blockquote>
 
+<li> <p> Line 12: specify smtpd_policy_service_request_limit to
+avoid error-recovery delays with policy servers that cannot
+maintain a persistent connection. </p>
+
 </ul>
 
-<p> On Solaris you must use inet: style sockets instead of unix:
+<p> With Solaris &lt; 9, or Postfix &lt; 2.10 on any Solaris
+version, use inet: style sockets instead of unix:
 style, as detailed in the "<a href="#client_config">Policy
 client/server configuration</a>" section above.  </p>
 
@@ -462,6 +605,7 @@ client/server configuration</a>" section above.  </p>
  9         reject_unauth_destination 
 10         check_policy_service inet:127.0.0.1:9998
 11         ...
+12     # smtpd_policy_service_request_limit = 1
 </pre>
 </blockquote>
 
@@ -497,9 +641,14 @@ http://www.monkeys.com/anti-spam/filtering/sender-domain-validate.in.
 
 <ul>
 
-<li> <p> Line 9: On Solaris you must use inet: style sockets
+<li> <p> Line 9: On Solaris &lt; 9, or Postfix &lt; 2.10 on any
+Solaris version, use inet: style sockets
 instead of unix: style, as detailed in the "<a href="#greylist">Example:
 greylist policy server</a>" section above.  </p>
+
+<li> <p> Line 5: reject_unauth_destination is not needed here if
+the mail relay policy is specified with smtpd_relay_restrictions
+(available with Postfix 2.10 and later). </p>
 
 <li> <p> Line 6: Be sure to specify "check_sender_access" AFTER
 "reject_unauth_destination" or else your system could become an
@@ -547,9 +696,14 @@ most of the delays and most of the database pollution problem. </p>
 
 <ul>
 
-<li> <p> Line 7: On Solaris you must use inet: style sockets
+<li> <p> Line 7: On Solaris &lt; 9, or Postfix &lt; 2.10 on any
+Solaris version, use inet: style sockets
 instead of unix: style, as detailed in the "<a href="#greylist">Example:
 greylist policy server</a>" section above.  </p>
+
+<li> <p> Line 5: reject_unauth_destination is not needed here if
+the mail relay policy is specified with smtpd_relay_restrictions
+(available with Postfix 2.10 and later). </p>
 
 <li> <p> Lines 6-7: Be sure to specify check_sender_access and
 check_policy_service AFTER reject_unauth_destination or else your

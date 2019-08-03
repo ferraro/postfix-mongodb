@@ -13,7 +13,9 @@
 
  /* External interface. */
 
-extern char *strip_addr(const char *, char **, int);
+extern char *strip_addr_internal(const char *, char **, const char *);
+
+#define strip_addr	strip_addr_internal
 
 /* LICENSE
 /* .ad
@@ -24,6 +26,11 @@ extern char *strip_addr(const char *, char **, int);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

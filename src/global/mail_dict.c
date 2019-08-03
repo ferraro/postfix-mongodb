@@ -10,6 +10,12 @@
 /* DESCRIPTION
 /*	This module registers dictionary types that depend on higher-level
 /*	Postfix-specific interfaces and protocols.
+/*
+/*	This also initializes the support for run-time loading of
+/*	lookup tables, if applicable.
+/*
+/*	The latter requires basic parameter initialization
+/*	by either mail_conf_read() or mail_params_init().
 /* LICENSE
 /* .ad
 /* .fi
@@ -29,6 +35,9 @@
 
 #include <dict.h>
 #include <msg.h>
+#include <mymalloc.h>
+#include <stringops.h>
+#include <dynamicmaps.h>
 
 /* Global library. */
 
@@ -40,6 +49,8 @@
 #include <dict_memcache.h>
 #include <dict_mongodb.h>
 #include <mail_dict.h>
+#include <mail_params.h>
+#include <mail_dict.h>
 
 typedef struct {
     char   *type;
@@ -48,6 +59,7 @@ typedef struct {
 
 static const DICT_OPEN_INFO dict_open_info[] = {
     DICT_TYPE_PROXY, dict_proxy_open,
+#ifndef USE_DYNAMIC_MAPS
 #ifdef HAS_LDAP
     DICT_TYPE_LDAP, dict_ldap_open,
 #endif
@@ -60,6 +72,7 @@ static const DICT_OPEN_INFO dict_open_info[] = {
 #ifdef HAS_SQLITE
     DICT_TYPE_SQLITE, dict_sqlite_open,
 #endif
+#endif					/* !USE_DYNAMIC_MAPS */
     DICT_TYPE_MEMCACHE, dict_memcache_open,
     DICT_TYPE_MONGODB, dict_mongodb_open,
     0,
@@ -71,11 +84,24 @@ void    mail_dict_init(void)
 {
     const DICT_OPEN_INFO *dp;
 
+#ifdef USE_DYNAMIC_MAPS
+    char   *path;
+
+    path = concatenate(var_meta_dir, "/", "dynamicmaps.cf",
+#ifdef SHLIB_VERSION
+		       ".", SHLIB_VERSION,
+#endif
+		       (char *) 0);
+    dymap_init(path, var_shlib_dir);
+    myfree(path);
+#endif
+
     for (dp = dict_open_info; dp->type; dp++)
 	dict_open_register(dp->type, dp->open);
 }
 
 #ifdef TEST
+
  /*
   * Proof-of-concept test program.
   */

@@ -4,9 +4,9 @@
 # SUMMARY
 #	Postfix PostgreSQL client configuration
 # SYNOPSIS
-#	\fBpostmap -q "\fIstring\fB" pgsql:/etc/postfix/filename\fR
+#	\fBpostmap -q "\fIstring\fB" pgsql:/etc/postfix/\fIfilename\fR
 #
-#	\fBpostmap -q - pgsql:/etc/postfix/\fIfilename\fR <\fIinputfile\fR
+#	\fBpostmap -q - pgsql:/etc/postfix/\fIfilename\fB <\fIinputfile\fR
 # DESCRIPTION
 #	The Postfix mail system uses optional tables for address
 #	rewriting or mail routing. These tables are usually in
@@ -22,49 +22,6 @@
 #	The file /etc/postfix/pgsql-aliases.cf has the same format as
 #	the Postfix main.cf file, and can specify the parameters
 #	described below.
-# BACKWARDS COMPATIBILITY
-# .ad
-# .fi
-#	For compatibility with other Postfix lookup tables, PostgreSQL
-#	parameters can also be defined in main.cf.  In order to do
-#	that, specify as PostgreSQL source a name that doesn't begin
-#	with a slash or a dot.	The PostgreSQL parameters will then
-#	be accessible as the name you've given the source in its
-#	definition, an underscore, and the name of the parameter.  For
-#	example, if the map is specified as "pgsql:\fIpgsqlname\fR",
-#	the parameter "hosts" below would be defined in main.cf as
-#	"\fIpgsqlname\fR_hosts".
-#
-#	Note: with this form, the passwords for the PostgreSQL sources
-#	are written in main.cf, which is normally world-readable.
-#	Support for this form will be removed in a future Postfix
-#	version.
-#
-#	Normally, the SQL query is specified via a single \fBquery\fR
-#	parameter (described in more detail below).  When this
-#	parameter is not specified in the map definition, Postfix
-#	reverts to an older interface, with the  SQL  query
-#	constructed  from the \fBselect_function\fR, \fBselect_field\fR,
-#	\fBtable\fR, \fBwhere_field\fR and \fBadditional_conditions\fR
-#	parameters.  The old interface will be gradually phased
-#	out. To migrate to the new interface set:
-#
-# .nf
-#	    \fBquery\fR = SELECT \fIselect_function\fR('%s')
-# .fi
-#
-#	or in the absence of \fBselect_function\fR, the lower precedence:
-#
-# .nf
-#	    \fBquery\fR = SELECT \fIselect_field\fR
-#	        FROM \fItable\fR
-#	        WHERE \fIwhere_field\fR = '%s'
-#	            \fIadditional_conditions\fR
-# .fi
-#
-#	Use the value, not the name, of each legacy parameter. Note
-#	that the \fBadditional_conditions\fR parameter is optional
-#	and if not empty, will always start with \fBAND\fR.
 # LIST MEMBERSHIP
 # .ad
 # .fi
@@ -87,24 +44,22 @@
 # .ad
 # .fi
 # .IP "\fBhosts\fR"
-#	The hosts that Postfix will try to connect to and query from.
-#	Specify \fIunix:\fR for UNIX-domain sockets, \fIinet:\fR for TCP
-#	connections (default).  Example:
+#	The hosts that Postfix will try to connect to and query
+#	from. Besides a \fBpostgresql://\fR connection URI, this
+#	setting supports the historical forms \fBunix:/\fIpathname\fR
+#	for UNIX-domain sockets and \fBinet:\fIhost:port\fR for TCP
+#	connections, where the \fBunix:\fR and \fBinet:\fR prefixes
+#	are accepted and ignored for backwards compatibility.
+#	Examples:
 # .nf
+#	    hosts = postgresql://username@example.com/tablename?sslmode=require
 #	    hosts = host1.some.domain host2.some.domain:port
 #	    hosts = unix:/file/name
 # .fi
 #
-#	The hosts are tried in random order, with all connections over
-#	UNIX domain sockets being tried before those over TCP.	The
-#	connections are automatically closed after being idle for about
-#	1 minute, and are re-opened as necessary.
-#
-#	NOTE: the \fIunix:\fR and \fIinet:\fR prefixes are accepted for
-#	backwards compatibility reasons, but are actually ignored.
-#	The PostgreSQL client library will always try to connect to an
-#	UNIX socket if the name starts with a slash, and will try a TCP
-#	connection otherwise.
+#	The hosts are tried in random order. The connections are
+#	automatically closed after being idle for about 1 minute,
+#	and are re-opened as necessary.
 # .IP "\fBuser, password\fR"
 #	The user name and password to log into the pgsql server.
 #	Example:
@@ -127,23 +82,23 @@
 #
 #	This parameter supports the following '%' expansions:
 # .RS
-# .IP "\fB\fB%%\fR\fR"
+# .IP "\fB%%\fR"
 #	This is replaced by a literal '%' character. (Postfix 2.2 and later)
-# .IP "\fB\fB%s\fR\fR"
+# .IP "\fB%s\fR"
 #	This is replaced by the input key.
 #	SQL quoting is used to make sure that the input key does not
 #	add unexpected metacharacters.
-# .IP "\fB\fB%u\fR\fR"
+# .IP "\fB%u\fR"
 #	When the input key is an address of the form user@domain, \fB%u\fR
 #	is replaced by the SQL quoted local part of the address.
 #	Otherwise, \fB%u\fR is replaced by the entire search string.
 #	If the localpart is empty, the query is suppressed and returns
 #	no results.
-# .IP "\fB\fB%d\fR\fR"
+# .IP "\fB%d\fR"
 #	When the input key is an address of the form user@domain, \fB%d\fR
 #	is replaced by the SQL quoted domain part of the address.
 #	Otherwise, the query is suppressed and returns no results.
-# .IP "\fB\fB%[SUD]\fR\fR"
+# .IP "\fB%[SUD]\fR"
 #	The upper-case equivalents of the above expansions behave in the
 #	\fBquery\fR parameter identically to their lower-case counter-parts.
 #	With the \fBresult_format\fR parameter (see below), they expand the
@@ -151,7 +106,7 @@
 # .IP
 #	The above %S, %U and %D expansions are available with Postfix 2.2
 #	and later
-# .IP "\fB\fB%[1-9]\fR\fR"
+# .IP "\fB%[1-9]\fR"
 #	The patterns %1, %2, ... %9 are replaced by the corresponding
 #	most significant component of the input key's domain. If the
 #	input key is \fIuser@mail.example.com\fR, then %1 is \fBcom\fR,
@@ -183,21 +138,21 @@
 #	to append (or prepend) text to the result. This parameter supports
 #	the following '%' expansions:
 # .RS
-# .IP "\fB\fB%%\fR\fR"
+# .IP "\fB%%\fR"
 #	This is replaced by a literal '%' character.
-# .IP "\fB\fB%s\fR\fR"
+# .IP "\fB%s\fR"
 #	This is replaced by the value of the result attribute. When
 #	result is empty it is skipped.
 # .IP "\fB%u\fR
 #	When the result attribute value is an address of the form
 #	user@domain, \fB%u\fR is replaced by the local part of the
 #	address. When the result has an empty localpart it is skipped.
-# .IP "\fB\fB%d\fR\fR"
+# .IP "\fB%d\fR"
 #	When a result attribute value is an address of the form
 #	user@domain, \fB%d\fR is replaced by the domain part of
 #	the attribute value. When the result is unqualified it
 #	is skipped.
-# .IP "\fB\fB%[SUD1-9]\fR\fB"
+# .IP "\fB%[SUD1-9]\fR"
 #	The upper-case and decimal digit expansions interpolate
 #	the parts of the input key rather than the result. Their
 #	behavior is identical to that described with \fBquery\fR,
@@ -245,6 +200,23 @@
 #     temporary error if the limit is exceeded.  Setting the
 #     limit to 1 ensures that lookups do not return multiple
 #     values.
+# OBSOLETE MAIN.CF PARAMETERS
+# .ad
+# .fi
+#	For compatibility with other Postfix lookup tables, PostgreSQL
+#	parameters can also be defined in main.cf.  In order to do
+#	that, specify as PostgreSQL source a name that doesn't begin
+#	with a slash or a dot.	The PostgreSQL parameters will then
+#	be accessible as the name you've given the source in its
+#	definition, an underscore, and the name of the parameter.  For
+#	example, if the map is specified as "pgsql:\fIpgsqlname\fR",
+#	the parameter "hosts" would be defined in main.cf as
+#	"\fIpgsqlname\fR_hosts".
+#
+#	Note: with this form, the passwords for the PostgreSQL sources
+#	are written in main.cf, which is normally world-readable.
+#	Support for this form will be removed in a future Postfix
+#	version.
 # OBSOLETE QUERY INTERFACES
 # .ad
 # .fi

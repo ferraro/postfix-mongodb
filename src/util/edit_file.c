@@ -55,7 +55,7 @@
 /*	pathname into the place of the original file. When any of
 /*	these operations fails, edit_file_close() behaves as if
 /*	edit_file_cleanup() was called. Regardless of whether these
-/*	operations suceed, edit_file_close() releases the exclusive
+/*	operations succeed, edit_file_close() releases the exclusive
 /*	lock, closes the output file, and frees up memory that was
 /*	allocated by edit_file_open().
 /*
@@ -182,7 +182,7 @@
 #define EDIT_FILE_FREE(ep) do { \
 	myfree((ep)->final_path); \
 	myfree((ep)->tmp_path); \
-	myfree((char *) (ep)); \
+	myfree((void *) (ep)); \
     } while (0)
 
 /* edit_file_open - open and lock file with deterministic temporary pathname */
@@ -223,7 +223,7 @@ EDIT_FILE *edit_file_open(const char *path, int flags, mode_t mode)
 	 * should replace the stat() call below by lstat().
 	 */
 	if ((ep->tmp_fp = vstream_fopen(ep->tmp_path, flags & ~(O_TRUNC),
-				    EDIT_FILE_MODE)) == 0) {
+					EDIT_FILE_MODE)) == 0) {
 	    saved_errno = errno;
 	    EDIT_FILE_FREE(ep);
 	    errno = saved_errno;

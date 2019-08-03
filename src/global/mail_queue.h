@@ -92,7 +92,7 @@ extern int mail_queue_id_ok(const char *);
   * - the inode number (base 51 encoded so that it contains no 'z').
   */
 #define MQID_LG_SEC_BASE	52	/* seconds safe alphabet base */
-#define MQID_LG_SEC_PAD	6	/* seconds minumum field width */
+#define MQID_LG_SEC_PAD	6	/* seconds minimum field width */
 #define MQID_LG_USEC_BASE	52	/* microseconds safe alphabet base */
 #define MQID_LG_USEC_PAD	4	/* microseconds exact field width */
 #define MQID_LG_TIME_PAD	(MQID_LG_SEC_PAD + MQID_LG_USEC_PAD)
@@ -143,6 +143,8 @@ extern int mail_queue_id_ok(const char *);
 	unsigned long _us_val; \
 	vstring_strncpy((bp), (zp) - MQID_LG_USEC_PAD, MQID_LG_USEC_PAD); \
 	MQID_LG_DECODE_USEC(STR(bp), _us_val, _error); \
+	if (_error) \
+	    _us_val = 0; \
 	(void) MQID_SH_ENCODE_USEC((bp), _us_val); \
     } while (0)
 
@@ -180,6 +182,11 @@ extern int mail_queue_id_ok(const char *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif					/* _MAIL_QUEUE_H_INCLUDED_ */

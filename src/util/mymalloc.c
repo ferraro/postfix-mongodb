@@ -6,15 +6,15 @@
 /* SYNOPSIS
 /*	#include <mymalloc.h>
 /*
-/*	char	*mymalloc(len)
+/*	void	*mymalloc(len)
 /*	ssize_t	len;
 /*
-/*	char	*myrealloc(ptr, len)
-/*	char	*ptr;
+/*	void	*myrealloc(ptr, len)
+/*	void	*ptr;
 /*	ssize_t	len;
 /*
 /*	void	myfree(ptr)
-/*	char	*ptr;
+/*	void	*ptr;
 /*
 /*	char	*mystrdup(str)
 /*	const char *str;
@@ -72,6 +72,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System libraries. */
@@ -142,9 +147,9 @@ static const char empty_string[] = "";
 
 /* mymalloc - allocate memory or bust */
 
-char   *mymalloc(ssize_t len)
+void   *mymalloc(ssize_t len)
 {
-    char   *ptr;
+    void   *ptr;
     MBLOCK *real_ptr;
 
     /*
@@ -167,7 +172,7 @@ char   *mymalloc(ssize_t len)
 
 /* myrealloc - reallocate memory or bust */
 
-char   *myrealloc(char *ptr, ssize_t len)
+void   *myrealloc(void *ptr, ssize_t len)
 {
     MBLOCK *real_ptr;
     ssize_t old_len;
@@ -188,7 +193,7 @@ char   *myrealloc(char *ptr, ssize_t len)
     len += MYMALLOC_FUZZ;
 #endif
     CHECK_IN_PTR(ptr, real_ptr, old_len, "myrealloc");
-    if ((real_ptr = (MBLOCK *) realloc((char *) real_ptr, SPACE_FOR(len))) == 0)
+    if ((real_ptr = (MBLOCK *) realloc((void *) real_ptr, SPACE_FOR(len))) == 0)
 	msg_fatal("myrealloc: insufficient memory for %ld bytes: %m",
 		  (long) len);
     CHECK_OUT_PTR(ptr, real_ptr, len);
@@ -199,7 +204,7 @@ char   *myrealloc(char *ptr, ssize_t len)
 
 /* myfree - release memory */
 
-void    myfree(char *ptr)
+void    myfree(void *ptr)
 {
     MBLOCK *real_ptr;
     ssize_t len;
@@ -208,8 +213,8 @@ void    myfree(char *ptr)
     if (ptr != empty_string) {
 #endif
 	CHECK_IN_PTR(ptr, real_ptr, len, "myfree");
-	memset((char *) real_ptr, FILLER, SPACE_FOR(len));
-	free((char *) real_ptr);
+	memset((void *) real_ptr, FILLER, SPACE_FOR(len));
+	free((void *) real_ptr);
 #ifndef NO_SHARED_EMPTY_STRINGS
     }
 #endif
@@ -219,13 +224,17 @@ void    myfree(char *ptr)
 
 char   *mystrdup(const char *str)
 {
+    size_t  len;
+
     if (str == 0)
 	msg_panic("mystrdup: null pointer argument");
 #ifndef NO_SHARED_EMPTY_STRINGS
     if (*str == 0)
 	return ((char *) empty_string);
 #endif
-    return (strcpy(mymalloc(strlen(str) + 1), str));
+    if ((len = strlen(str) + 1) > SSIZE_T_MAX)
+	msg_panic("mystrdup: string length >= SSIZE_T_MAX");
+    return (strcpy(mymalloc(len), str));
 }
 
 /* mystrndup - save substring to heap */
@@ -252,7 +261,7 @@ char   *mystrndup(const char *str, ssize_t len)
 
 /* mymemdup - copy memory */
 
-char   *mymemdup(const char *ptr, ssize_t len)
+char   *mymemdup(const void *ptr, ssize_t len)
 {
     if (ptr == 0)
 	msg_panic("mymemdup: null pointer argument");

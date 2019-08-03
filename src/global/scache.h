@@ -3,11 +3,11 @@
 
 /*++
 /* NAME
-/*      scache 3h
+/*	scache 3h
 /* SUMMARY
-/*      generic session cache API
+/*	generic session cache API
 /* SYNOPSIS
-/*      #include <scache.h>
+/*	#include <scache.h>
 /* DESCRIPTION
 /* .nf
 
@@ -92,7 +92,7 @@ typedef int (*SCACHE_FIND_DEST_FN) (SCACHE *, const char *, VSTRING *, VSTRING *
   */
 struct SCACHE_SIZE {
     int     dest_count;			/* Nr of destination names */
-    int     endp_count;			/* Nr of endpoint adresses */
+    int     endp_count;			/* Nr of endpoint addresses */
     int     sess_count;			/* Nr of cached sessions */
 };
 
@@ -155,6 +155,11 @@ extern SCACHE *scache_multi_create(void);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

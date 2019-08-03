@@ -39,16 +39,17 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
 
 #include <sys_defs.h>
 #include <string.h>
-
-#ifdef STRCASECMP_IN_STRINGS_H
-#include <strings.h>
-#endif
 
 /* Utility library. */
 
@@ -57,6 +58,7 @@
 #include <argv.h>
 #include <vstring.h>
 #include <dict.h>
+#include <stringops.h>
 
 /* Global library. */
 
@@ -112,7 +114,7 @@ ARGV   *cleanup_map1n_internal(CLEANUP_STATE *state, const char *addr,
     for (arg = 0; arg < argv->argc; arg++) {
 	if (argv->argc > var_virt_expan_limit) {
 	    msg_warn("%s: unreasonable %s map expansion size for %s -- "
-		     "deferring delivery",
+		     "message not accepted, try again later",
 		     state->queue_id, maps->title, addr);
 	    state->errs |= CLEANUP_STAT_DEFER;
 	    UPDATE(state->reason, "4.6.0 Alias expansion error");
@@ -128,36 +130,44 @@ ARGV   *cleanup_map1n_internal(CLEANUP_STATE *state, const char *addr,
 		break;
 	    if (count >= var_virt_recur_limit) {
 		msg_warn("%s: unreasonable %s map nesting for %s -- "
-			 "deferring delivery",
+			 "message not accepted, try again later",
 			 state->queue_id, maps->title, addr);
 		state->errs |= CLEANUP_STAT_DEFER;
 		UPDATE(state->reason, "4.6.0 Alias expansion error");
 		UNEXPAND(argv, addr);
 		RETURN(argv);
 	    }
-	    quote_822_local(state->temp1, argv->argv[arg]);
-	    if ((lookup = mail_addr_map(maps, STR(state->temp1), propagate)) != 0) {
+	    if ((lookup = mail_addr_map_internal(maps, argv->argv[arg],
+						 propagate)) != 0) {
 		saved_lhs = mystrdup(argv->argv[arg]);
 		for (i = 0; i < lookup->argc; i++) {
-		    unquote_822_local(state->temp1, lookup->argv[i]);
+		    if (strlen(lookup->argv[i]) > var_virt_addrlen_limit) {
+			msg_warn("%s: unreasonable %s result %.300s... -- "
+				 "message not accepted, try again later",
+			     state->queue_id, maps->title, lookup->argv[i]);
+			state->errs |= CLEANUP_STAT_DEFER;
+			UPDATE(state->reason, "4.6.0 Alias expansion error");
+			UNEXPAND(argv, addr);
+			RETURN(argv);
+		    }
 		    if (i == 0) {
-			UPDATE(argv->argv[arg], STR(state->temp1));
+			UPDATE(argv->argv[arg], lookup->argv[i]);
 		    } else {
-			argv_add(argv, STR(state->temp1), ARGV_END);
+			argv_add(argv, lookup->argv[i], ARGV_END);
 			argv_terminate(argv);
 		    }
 
 		    /*
 		     * Allow an address to expand into itself once.
 		     */
-		    if (strcasecmp(saved_lhs, STR(state->temp1)) == 0)
+		    if (strcasecmp_utf8(saved_lhs, lookup->argv[i]) == 0)
 			been_here_fixed(been_here, saved_lhs);
 		}
 		myfree(saved_lhs);
 		argv_free(lookup);
 	    } else if (maps->error != 0) {
 		msg_warn("%s: %s map lookup problem for %s -- "
-			 "deferring delivery",
+			 "message not accepted, try again later",
 			 state->queue_id, maps->title, addr);
 		state->errs |= CLEANUP_STAT_WRITE;
 		UPDATE(state->reason, "4.6.0 Alias expansion error");

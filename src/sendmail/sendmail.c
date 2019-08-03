@@ -76,6 +76,11 @@
 /* .IP \fB-bi\fR
 /*	Initialize alias database. See the \fBnewaliases\fR
 /*	command above.
+/* .IP \fB-bl\fR
+/*	Go into daemon mode. To accept only local connections as
+/*	with Sendmail\'s \fB-bl\fR option, specify "\fBinet_interfaces
+/*	= loopback\fR" in the Postfix \fBmain.cf\fR configuration
+/*	file.
 /* .IP \fB-bm\fR
 /*	Read mail from standard input and arrange for delivery.
 /*	This is the default mode of operation.
@@ -102,10 +107,15 @@
 /*	parent directory. This information is ignored with Postfix
 /*	versions before 2.3.
 /*
+/*	With Postfix version 3.2 and later, a non-default directory
+/*	must be authorized in the default \fBmain.cf\fR file, through
+/*	the alternate_config_directories or multi_instance_directories
+/*	parameters.
+/*
 /*	With all Postfix versions, you can specify a directory pathname
 /*	with the MAIL_CONFIG environment variable to override the
 /*	location of configuration files.
-/* .IP "\fB-F \fIfull_name\fR
+/* .IP "\fB-F \fIfull_name\fR"
 /*	Set the sender full name. This overrides the NAME environment
 /*	variable, and is used only with messages that
 /*	have no \fBFrom:\fR message header.
@@ -150,7 +160,8 @@
 /*	\fItype\fR:\fIpathname\fR. See \fBpostalias\fR(1) for
 /*	details.
 /* .IP "\fB-O \fIoption=value\fR (ignored)"
-/*	Backwards compatibility.
+/*	Set the named \fIoption\fR to \fIvalue\fR. Use the equivalent
+/*	configuration parameter in \fBmain.cf\fR instead.
 /* .IP "\fB-o7\fR (ignored)"
 /* .IP "\fB-o8\fR (ignored)"
 /*	To send 8-bit or binary content, use an appropriate MIME encapsulation
@@ -167,9 +178,16 @@
 /*	Set the envelope sender address. This is the address where
 /*	delivery problems are sent to. With Postfix versions before 2.1, the
 /*	\fBErrors-To:\fR message header overrides the error return address.
-/* .IP "\fB-R \fIreturn_limit\fR (ignored)"
-/*	Limit the size of bounced mail. Use the \fBbounce_size_limit\fR
-/*	configuration parameter instead.
+/* .IP "\fB-R \fIreturn\fR"
+/*	Delivery status notification control.  Specify "hdrs" to
+/*	return only the header when a message bounces, "full" to
+/*	return a full copy (the default behavior).
+/*
+/*	The \fB-R\fR option specifies an upper bound; Postfix will
+/*	return only the header, when a full copy would exceed the
+/*	bounce_size_limit setting.
+/*
+/*	This option is ignored before Postfix version 2.10.
 /* .IP \fB-q\fR
 /*	Attempt to deliver all queued mail. This is implemented by
 /*	executing the \fBpostqueue\fR(1) command.
@@ -237,8 +255,8 @@
 /*	Thus, the usual precautions need to be taken against malicious
 /*	inputs.
 /* DIAGNOSTICS
-/*	Problems are logged to \fBsyslogd\fR(8) and to the standard error
-/*	stream.
+/*	Problems are logged to \fBsyslogd\fR(8) or \fBpostlogd\fR(8),
+/*	and to the standard error stream.
 /* ENVIRONMENT
 /* .ad
 /* .fi
@@ -270,7 +288,7 @@
 /* TROUBLE SHOOTING CONTROLS
 /* .ad
 /* .fi
-/*	The DEBUG_README file gives examples of how to trouble shoot a
+/*	The DEBUG_README file gives examples of how to troubleshoot a
 /*	Postfix system.
 /* .IP "\fBdebugger_command (empty)\fR"
 /*	The external command to execute when a Postfix daemon program is
@@ -345,14 +363,12 @@
 /*	The default database type for use in \fBnewaliases\fR(1), \fBpostalias\fR(1)
 /*	and \fBpostmap\fR(1) commands.
 /* .IP "\fBdelay_warning_time (0h)\fR"
-/*	The time after which the sender receives the message headers of
-/*	mail that is still queued.
-/* .IP "\fBenable_errors_to (no)\fR"
-/*	Report mail delivery errors to the address specified with the
-/*	non-standard Errors-To: message header, instead of the envelope
-/*	sender address (this feature is removed with Postfix version 2.2, is
-/*	turned off by default with Postfix version 2.1, and is always turned on
-/*	with older Postfix versions).
+/*	The time after which the sender receives a copy of the message
+/*	headers of mail that is still queued.
+/* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBmail_owner (postfix)\fR"
 /*	The UNIX system account that owns the Postfix queue and most Postfix
 /*	daemon processes.
@@ -365,8 +381,21 @@
 /* .IP "\fBsyslog_facility (mail)\fR"
 /*	The syslog facility of Postfix logging.
 /* .IP "\fBsyslog_name (see 'postconf -d' output)\fR"
-/*	The mail system name that is prepended to the process name in syslog
-/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/*	A prefix that is prepended to the process name in syslog
+/*	records, so that, for example, "smtpd" becomes "prefix/smtpd".
+/* .PP
+/*	Postfix 3.2 and later:
+/* .IP "\fBalternate_config_directories (empty)\fR"
+/*	A list of non-default Postfix configuration directories that may
+/*	be specified with "-c config_directory" on the command line (in the
+/*	case of \fBsendmail\fR(1), with the "-C" option), or via the MAIL_CONFIG
+/*	environment parameter.
+/* .IP "\fBmulti_instance_directories (empty)\fR"
+/*	An optional list of non-default Postfix configuration directories;
+/*	these directories belong to additional Postfix instances that share
+/*	the Postfix executable files and documentation with the default
+/*	Postfix instance, and that are started, stopped, etc., together
+/*	with the default Postfix instance.
 /* FILES
 /*	/var/spool/postfix, mail queue
 /*	/etc/postfix, configuration files
@@ -380,6 +409,7 @@
 /*	postdrop(1), mail posting utility
 /*	postfix(1), mail system control
 /*	postqueue(1), mail queue control
+/*	postlogd(8), Postfix logging
 /*	syslogd(8), system logging
 /* README_FILES
 /* .ad
@@ -400,6 +430,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -412,7 +447,6 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <fcntl.h>
-#include <syslog.h>
 #include <time.h>
 #include <errno.h>
 #include <ctype.h>
@@ -425,7 +459,6 @@
 #include <mymalloc.h>
 #include <vstream.h>
 #include <msg_vstream.h>
-#include <msg_syslog.h>
 #include <vstring_vstream.h>
 #include <username.h>
 #include <fullname.h>
@@ -438,6 +471,8 @@
 #include <split_at.h>
 #include <name_code.h>
 #include <warn_stat.h>
+#include <clean_env.h>
+#include <maillog_client.h>
 
 /* Global library. */
 
@@ -460,8 +495,10 @@
 #include <deliver_request.h>
 #include <mime_state.h>
 #include <header_opts.h>
+#include <mail_dict.h>
 #include <user_acl.h>
 #include <dsn_mask.h>
+#include <mail_parm_split.h>
 
 /* Application-specific. */
 
@@ -569,7 +606,7 @@ static void output_header(void *context, int header_class,
 	    tok822_internalize(state->temp, tpp[0]->head, TOK822_STR_DEFL);
 	    argv_add(rcpt, STR(state->temp), (char *) 0);
 	}
-	myfree((char *) addr_list);
+	myfree((void *) addr_list);
 	tok822_free_tree(tree);
     }
 
@@ -599,7 +636,7 @@ static void output_header(void *context, int header_class,
 /* enqueue - post one message */
 
 static void enqueue(const int flags, const char *encoding,
-		            const char *dsn_envid, int dsn_notify,
+		         const char *dsn_envid, int dsn_ret, int dsn_notify,
 		            const char *rewrite_context, const char *sender,
 		            const char *full_name, char **recipients)
 {
@@ -639,7 +676,8 @@ static void enqueue(const int flags, const char *encoding,
      * Access control is enforced in the postdrop command. The code here
      * merely produces a more user-friendly interface.
      */
-    if ((errstr = check_user_acl_byuid(var_submit_acl, uid)) != 0)
+    if ((errstr = check_user_acl_byuid(VAR_SUBMIT_ACL,
+				       var_submit_acl, uid)) != 0)
 	msg_fatal_status(EX_NOPERM,
 	  "User %s(%ld) is not allowed to submit mail", errstr, (long) uid);
 
@@ -713,6 +751,9 @@ static void enqueue(const int flags, const char *encoding,
     if (dsn_envid)
 	rec_fprintf(dst, REC_TYPE_ATTR, "%s=%s",
 		    MAIL_ATTR_DSN_ENVID, dsn_envid);
+    if (dsn_ret)
+	rec_fprintf(dst, REC_TYPE_ATTR, "%s=%d",
+		    MAIL_ATTR_DSN_RET, dsn_ret);
     rec_fprintf(dst, REC_TYPE_ATTR, "%s=%s",
 		MAIL_ATTR_RWR_CONTEXT, rewrite_context);
     if (full_name || (full_name = fullname()) != 0)
@@ -890,7 +931,7 @@ static void enqueue(const int flags, const char *encoding,
     if (rcpt_count == 0)
 	msg_fatal_status(EX_USAGE, (flags & SM_FLAG_XRCPT) ?
 		 "%s(%ld): No recipient addresses found in message header" :
-			 "Recipient addresses must be specified on"
+			 "%s(%ld): Recipient addresses must be specified on"
 			 " the command line or via the -t option",
 			 saved_sender, (long) uid);
 
@@ -964,8 +1005,10 @@ int     main(int argc, char **argv)
     uid_t   uid;
     const char *rewrite_context = MAIL_ATTR_RWR_LOCAL;
     int     dsn_notify = 0;
+    int     dsn_ret = 0;
     const char *dsn_envid = 0;
     int     saved_optind;
+    ARGV   *import_env;
 
     /*
      * Fingerprint executables and core dumps.
@@ -1006,15 +1049,15 @@ int     main(int argc, char **argv)
 	debug_me = 1;
 
     /*
-     * Initialize. Set up logging, read the global configuration file and
-     * extract configuration information. Set up signal handlers so that we
-     * can clean up incomplete output.
+     * Initialize. Set up logging. Read the global configuration file after
+     * command-line processing. Set up signal handlers so that we can clean
+     * up incomplete output.
      */
     if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
 	argv[0] = slash + 1;
     msg_vstream_init(argv[0], VSTREAM_ERR);
     msg_cleanup(tempfail);
-    msg_syslog_init(mail_task("sendmail"), LOG_PID, LOG_FACILITY);
+    maillog_client_init(mail_task("sendmail"), MAILLOG_CLIENT_FLAG_NONE);
     set_mail_conf_str(VAR_PROCNAME, var_procname = mystrdup(argv[0]));
 
     /*
@@ -1051,19 +1094,28 @@ int     main(int argc, char **argv)
 	    break;
 	if (c == 'C') {
 	    VSTRING *buf = vstring_alloc(1);
+	    char   *dir;
 
-	    if (setenv(CONF_ENV_PATH,
-		   strcmp(sane_basename(buf, optarg), MAIN_CONF_FILE) == 0 ?
-		       sane_dirname(buf, optarg) : optarg, 1) < 0)
+	    dir = strcmp(sane_basename(buf, optarg), MAIN_CONF_FILE) == 0 ?
+		sane_dirname(buf, optarg) : optarg;
+	    if (strcmp(dir, DEF_CONFIG_DIR) != 0 && geteuid() != 0)
+		mail_conf_checkdir(dir);
+	    if (setenv(CONF_ENV_PATH, dir, 1) < 0)
 		msg_fatal_status(EX_UNAVAILABLE, "out of memory");
 	    vstring_free(buf);
 	}
     }
     optind = saved_optind;
     mail_conf_read();
-    if (strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0)
-	msg_syslog_init(mail_task("sendmail"), LOG_PID, LOG_FACILITY);
+    /* Enforce consistent operation of different Postfix parts.	 */
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
+    update_env(import_env->argv);
+    argv_free(import_env);
+    /* Re-evaluate mail_task() after reading main.cf. */
+    maillog_client_init(mail_task("sendmail"), MAILLOG_CLIENT_FLAG_NONE);
     get_mail_conf_str_table(str_table);
+
+    mail_dict_init();
 
     if (chdir(var_queue_dir))
 	msg_fatal_status(EX_UNAVAILABLE, "chdir %s: %m", var_queue_dir);
@@ -1156,6 +1208,10 @@ int     main(int argc, char **argv)
 	    if ((dsn_notify = dsn_notify_mask(optarg)) == 0)
 		msg_warn("bad -N option value -- ignored");
 	    break;
+	case 'R':
+	    if ((dsn_ret = dsn_ret_code(optarg)) == 0)
+		msg_warn("bad -R option value -- ignored");
+	    break;
 	case 'V':				/* DSN, was: VERP */
 	    if (strlen(optarg) > 100)
 		msg_warn("too long -V option value -- ignored");
@@ -1181,6 +1237,7 @@ int     main(int argc, char **argv)
 	    default:
 		msg_fatal_status(EX_USAGE, "unsupported: -%c%c", c, *optarg);
 	    case 'd':				/* daemon mode */
+	    case 'l':				/* daemon mode */
 		if (mode == SM_MODE_FLUSHQ)
 		    msg_warn("ignoring -q option in daemon mode");
 		mode = SM_MODE_DAEMON;
@@ -1282,6 +1339,8 @@ int     main(int argc, char **argv)
 	    msg_fatal_status(EX_USAGE, "-t option cannot be used with -bv");
 	if (dsn_notify)
 	    msg_fatal_status(EX_USAGE, "-N option cannot be used with -bv");
+	if (dsn_ret)
+	    msg_fatal_status(EX_USAGE, "-R option cannot be used with -bv");
 	if (msg_verbose == 1)
 	    msg_fatal_status(EX_USAGE, "-v option cannot be used with -bv");
     }
@@ -1326,7 +1385,7 @@ int     main(int argc, char **argv)
 	    mail_run_replace(var_command_dir, ext_argv->argv);
 	    /* NOTREACHED */
 	} else {
-	    enqueue(flags, encoding, dsn_envid, dsn_notify,
+	    enqueue(flags, encoding, dsn_envid, dsn_ret, dsn_notify,
 		    rewrite_context, sender, full_name, argv + OPTIND);
 	    exit(0);
 	    /* NOTREACHED */
@@ -1377,7 +1436,7 @@ int     main(int argc, char **argv)
 	argv_add(ext_argv, "postalias", (char *) 0);
 	for (n = 0; n < msg_verbose; n++)
 	    argv_add(ext_argv, "-v", (char *) 0);
-	argv_split_append(ext_argv, var_alias_db_map, ", \t\r\n");
+	argv_split_append(ext_argv, var_alias_db_map, CHARS_COMMA_SP);
 	argv_terminate(ext_argv);
 	mail_run_replace(var_command_dir, ext_argv->argv);
 	/* NOTREACHED */
@@ -1386,7 +1445,8 @@ int     main(int argc, char **argv)
 	    msg_fatal_status(EX_USAGE,
 			     "stand-alone mode requires no recipient");
 	/* The actual enforcement happens in the postdrop command. */
-	if ((errstr = check_user_acl_byuid(var_submit_acl, uid = getuid())) != 0)
+	if ((errstr = check_user_acl_byuid(VAR_SUBMIT_ACL, var_submit_acl,
+					   uid = getuid())) != 0)
 	    msg_fatal_status(EX_NOPERM,
 			     "User %s(%ld) is not allowed to submit mail",
 			     errstr, (long) uid);

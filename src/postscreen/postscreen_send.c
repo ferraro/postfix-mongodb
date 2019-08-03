@@ -6,6 +6,8 @@
 /* SYNOPSIS
 /*	#include <postscreen.h>
 /*
+/*	void	pcs_send_pre_jail_init(void)
+/*
 /*	int	psc_send_reply(state, text)
 /*	PSC_STATE *state;
 /*	const char *text;
@@ -17,6 +19,8 @@
 /*	void	psc_send_socket(state)
 /*	PSC_STATE *state;
 /* DESCRIPTION
+/*	pcs_send_pre_jail_init() performs one-time initialization.
+/*
 /*	psc_send_reply() sends the specified text to the specified
 /*	remote SMTP client.  In case of an immediate error, it logs
 /*	a warning (except EPIPE) with the client address and port,
@@ -48,6 +52,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -61,15 +70,21 @@
 #include <msg.h>
 #include <iostuff.h>
 #include <connect.h>
+#include <attr.h>
+#include <vstream.h>
 
 /* Global library. */
 
 #include <mail_params.h>
 #include <smtp_reply_footer.h>
+#include <mail_proto.h>
+#include <maps.h>
 
 /* Application-specific. */
 
 #include <postscreen.h>
+
+static MAPS *psc_rej_ftr_maps;
 
  /*
   * This program screens all inbound SMTP connections, so it better not waste
@@ -78,16 +93,49 @@
 #define PSC_SEND_SOCK_CONNECT_TIMEOUT	1
 #define PSC_SEND_SOCK_NOTIFY_TIMEOUT	100
 
+/* pcs_send_pre_jail_init - initialize */
+
+void    pcs_send_pre_jail_init(void)
+{
+    static int init_count = 0;
+
+    if (init_count++ != 0)
+	msg_panic("pcs_send_pre_jail_init: multiple calls");
+
+    /*
+     * SMTP server reject footer.
+     */
+    if (*var_psc_rej_ftr_maps)
+	psc_rej_ftr_maps = maps_create(VAR_SMTPD_REJ_FTR_MAPS,
+				       var_psc_rej_ftr_maps,
+				       DICT_FLAG_LOCK);
+}
+
+/* psc_get_footer - find that footer */
+
+static const char *psc_get_footer(const char *text, ssize_t text_len)
+{
+    static VSTRING *footer_buf = 0;
+
+    if (footer_buf == 0)
+	footer_buf = vstring_alloc(100);
+    /* Strip the \r\n for consistency with smtpd. */
+    vstring_strncpy(footer_buf, text, text_len);
+    return (psc_maps_find(psc_rej_ftr_maps, STR(footer_buf), 0));
+}
+
 /* psc_send_reply - send reply to remote SMTP client */
 
 int     psc_send_reply(PSC_STATE *state, const char *text)
 {
     ssize_t start;
     int     ret;
+    const char *footer;
+    ssize_t text_len = strlen(text) - 2;
 
     if (msg_verbose)
 	msg_info("> [%s]:%s: %.*s", state->smtp_client_addr,
-		 state->smtp_client_port, (int) strlen(text) - 2, text);
+		 state->smtp_client_port, (int) text_len, text);
 
     /*
      * Append the new text to earlier text that could not be sent because the
@@ -111,10 +159,13 @@ int     psc_send_reply(PSC_STATE *state, const char *text)
     /*
      * Append the optional reply footer.
      */
-    if (*var_psc_rej_footer && (*text == '4' || *text == '5'))
-	smtp_reply_footer(state->send_buf, start, var_psc_rej_footer,
+    if ((*text == '4' || *text == '5')
+	&& ((psc_rej_ftr_maps != 0
+	     && (footer = psc_get_footer(text, text_len)) != 0)
+	    || *(footer = var_psc_rej_footer) != 0))
+	smtp_reply_footer(state->send_buf, start, footer,
 			  STR(psc_expand_filter), psc_expand_lookup,
-			  (char *) state);
+			  (void *) state);
 
     /*
      * Do a best effort sending text, but don't block when the output is
@@ -132,7 +183,7 @@ int     psc_send_reply(PSC_STATE *state, const char *text)
 
 /* psc_send_socket_close_event - file descriptor has arrived or timeout */
 
-static void psc_send_socket_close_event(int event, char *context)
+static void psc_send_socket_close_event(int event, void *context)
 {
     const char *myname = "psc_send_socket_close_event";
     PSC_STATE *state = (PSC_STATE *) context;
@@ -163,6 +214,8 @@ void    psc_send_socket(PSC_STATE *state)
 {
     const char *myname = "psc_send_socket";
     int     server_fd;
+    int     pass_err;
+    VSTREAM *fp;
 
     if (msg_verbose > 1)
 	msg_info("%s: sq=%d cq=%d send socket %d from [%s]:%s",
@@ -187,8 +240,8 @@ void    psc_send_socket(PSC_STATE *state)
      * Postfix-specific.
      */
     if ((server_fd =
-	 PASS_CONNECT(psc_smtpd_service_name, NON_BLOCKING,
-		      PSC_SEND_SOCK_CONNECT_TIMEOUT)) < 0) {
+	 LOCAL_CONNECT(psc_smtpd_service_name, NON_BLOCKING,
+		       PSC_SEND_SOCK_CONNECT_TIMEOUT)) < 0) {
 	msg_warn("cannot connect to service %s: %m", psc_smtpd_service_name);
 	if (state->flags & PSC_STATE_FLAG_PREGR_TODO) {
 	    PSC_SMTPD_X21(state, "421 4.3.2 No system resources\r\n");
@@ -198,8 +251,20 @@ void    psc_send_socket(PSC_STATE *state)
 	}
 	return;
     }
-    if (LOCAL_SEND_FD(server_fd,
-		      vstream_fileno(state->smtp_client_stream)) < 0) {
+    /* XXX Note: no dummy read between LOCAL_SEND_FD() and attr_print(). */
+    fp = vstream_fdopen(server_fd, O_RDWR);
+    pass_err =
+	(LOCAL_SEND_FD(server_fd,
+		       vstream_fileno(state->smtp_client_stream)) < 0
+	 || (attr_print(fp, ATTR_FLAG_NONE,
+	  SEND_ATTR_STR(MAIL_ATTR_ACT_CLIENT_ADDR, state->smtp_client_addr),
+	  SEND_ATTR_STR(MAIL_ATTR_ACT_CLIENT_PORT, state->smtp_client_port),
+	  SEND_ATTR_STR(MAIL_ATTR_ACT_SERVER_ADDR, state->smtp_server_addr),
+	  SEND_ATTR_STR(MAIL_ATTR_ACT_SERVER_PORT, state->smtp_server_port),
+			ATTR_TYPE_END) || vstream_fflush(fp)));
+    /* XXX Note: no read between attr_print() and vstream_fdclose(). */
+    (void) vstream_fdclose(fp);
+    if (pass_err != 0) {
 	msg_warn("cannot pass connection to service %s: %m",
 		 psc_smtpd_service_name);
 	(void) close(server_fd);
@@ -222,7 +287,7 @@ void    psc_send_socket(PSC_STATE *state)
 #endif
 	PSC_ADD_SERVER_STATE(state, server_fd);
 	PSC_READ_EVENT_REQUEST(state->smtp_server_fd, psc_send_socket_close_event,
-			       (char *) state, PSC_SEND_SOCK_NOTIFY_TIMEOUT);
+			       (void *) state, PSC_SEND_SOCK_NOTIFY_TIMEOUT);
 	return;
     }
 }

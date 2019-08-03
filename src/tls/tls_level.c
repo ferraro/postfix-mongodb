@@ -12,9 +12,8 @@
 /*	const char *str_tls_level(level)
 /*	int	level;
 /* DESCRIPTION
-/*	The macros in this module convert TLS levels from symbolic
-/*	name to internal form and vice versa. The macros are safe
-/*	because they evaluate their arguments only once.
+/*	The functions in this module convert TLS levels from symbolic
+/*	name to internal form and vice versa.
 /*
 /*	tls_level_lookup() converts a TLS level from symbolic name
 /*	to internal form. When an unknown level is specified,
@@ -22,7 +21,9 @@
 /*
 /*	str_tls_level() converts a TLS level from internal form to
 /*	symbolic name. The result is a null pointer for an unknown
-/*	level.
+/*	level.  The "halfdane" level is not a valid user-selected TLS level,
+/*	it is generated internally and is only valid output for the
+/*	str_tls_level() function.
 /* SEE ALSO
 /*	name_code(3) name to number mapping
 /* LICENSE
@@ -54,20 +55,41 @@
 /* Application-specific. */
 
  /*
-  * Order is critical:
+  * Numerical order of levels is critical (see tls.h):
   * 
-  * Levels > "encrypt" are expected to match a peer certificate.
+  * - With "may" and higher, TLS is enabled.
   * 
-  * Levels >= "verify" are expected to require a valid CA trust-chain
+  * - With "encrypt" and higher, TLS is required.
   * 
-  * This forces "fingerprint" between "encrypt" and "verify".
+  * - With "fingerprint" and higher, the peer certificate must match.
+  * 
+  * - With "dane" and higher, the peer certificate must also be trusted,
+  * possibly via TLSA RRs that make it its own authority.
+  * 
+  * The smtp(8) client will report trust failure in preference to reporting
+  * failure to match, so we make "dane" larger than "fingerprint".
   */
-const NAME_CODE tls_level_table[] = {
+static const NAME_CODE tls_level_table[] = {
     "none", TLS_LEV_NONE,
     "may", TLS_LEV_MAY,
     "encrypt", TLS_LEV_ENCRYPT,
     "fingerprint", TLS_LEV_FPRINT,
+    "halfdane", TLS_LEV_HALF_DANE,	/* output only */
+    "dane", TLS_LEV_DANE,
+    "dane-only", TLS_LEV_DANE_ONLY,
     "verify", TLS_LEV_VERIFY,
     "secure", TLS_LEV_SECURE,
     0, TLS_LEV_INVALID,
 };
+
+int     tls_level_lookup(const char *name)
+{
+    int     level = name_code(tls_level_table, NAME_CODE_FLAG_NONE, name);
+
+    return ((level != TLS_LEV_HALF_DANE) ? level : TLS_LEV_INVALID);
+}
+
+const char *str_tls_level(int level)
+{
+    return (str_name_code(tls_level_table, level));
+}

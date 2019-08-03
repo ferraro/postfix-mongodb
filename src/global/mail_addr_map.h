@@ -19,12 +19,18 @@
  /*
   * Global library.
   */
+#include <mail_addr_form.h>
 #include <maps.h>
 
  /*
   * External interface.
   */
-extern ARGV *mail_addr_map(MAPS *, const char *, int);
+extern ARGV *mail_addr_map_opt(MAPS *, const char *, int, int, int, int);
+
+ /* The least-overhead form. */
+#define mail_addr_map_internal(path, address, propagate) \
+	mail_addr_map_opt((path), (address), (propagate), \
+		  MA_FORM_INTERNAL, MA_FORM_EXTERNAL, MA_FORM_INTERNAL)
 
 /* LICENSE
 /* .ad
@@ -35,6 +41,11 @@ extern ARGV *mail_addr_map(MAPS *, const char *, int);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

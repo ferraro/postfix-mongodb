@@ -67,6 +67,10 @@
 /* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
 /*	The default location of the Postfix main.cf and master.cf
 /*	configuration files.
+/* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
+/*	The list of environment parameters that a privileged Postfix
+/*	process will import from a non-Postfix parent process, or name=value
+/*	environment overrides.
 /* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
 /*	The location of the Postfix top-level queue directory.
 /* FILES
@@ -82,6 +86,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -105,6 +114,7 @@
 #include <vstring_vstream.h>
 #include <stringops.h>
 #include <warn_stat.h>
+#include <clean_env.h>
 
 /* Global library. */
 
@@ -117,6 +127,7 @@
 #include <mail_proto.h>
 #include <is_header.h>
 #include <lex_822.h>
+#include <mail_parm_split.h>
 
 /* Application-specific. */
 
@@ -236,7 +247,7 @@ static void postcat(VSTREAM *fp, VSTRING *buffer, int flags)
 		/* Optimization: skip to extracted segment marker. */
 		if (do_print == 0 && (flags & PC_FLAG_PRINT_ENV)
 		    && data_offset >= 0 && data_size >= 0
-		    && vstream_fseek(fp, data_offset + data_size, SEEK_SET) < 0)
+		&& vstream_fseek(fp, data_offset + data_size, SEEK_SET) < 0)
 		    msg_fatal("seek error: %m");
 	    }
 	    /* Optional output happens further down below. */
@@ -419,6 +430,7 @@ int     main(int argc, char **argv)
     };
     char  **cpp;
     int     tries;
+    ARGV   *import_env;
 
     /*
      * Fingerprint executables and core dumps.
@@ -481,6 +493,9 @@ int     main(int argc, char **argv)
      * Further initialization...
      */
     mail_conf_read();
+    import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);
+    update_env(import_env->argv);
+    argv_free(import_env);
 
     /*
      * Initialize.
@@ -492,8 +507,8 @@ int     main(int argc, char **argv)
      */
     if (argc == optind) {
 	vstream_control(VSTREAM_IN,
-			VSTREAM_CTL_PATH, "stdin",
-			VSTREAM_CTL_END);
+			CA_VSTREAM_CTL_PATH("stdin"),
+			CA_VSTREAM_CTL_END);
 	postcat(VSTREAM_IN, buffer, flags);
     }
 

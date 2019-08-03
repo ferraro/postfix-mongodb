@@ -37,6 +37,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -44,6 +49,7 @@
 #include <sys_defs.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>			/* ssscanf() */
 #include <ctype.h>
 
 /* Utility library. */
@@ -66,6 +72,8 @@
 #include <mail_proto.h>
 #include <dsn_mask.h>
 #include <rec_attr_map.h>
+#include <smtputf8.h>
+#include <deliver_request.h>
 
 /* Application-specific. */
 
@@ -93,7 +101,8 @@ void    cleanup_envelope(CLEANUP_STATE *state, int type,
 		       (REC_TYPE_SIZE_CAST2) 0,	/* content offset */
 		       (REC_TYPE_SIZE_CAST3) 0,	/* recipient count */
 		       (REC_TYPE_SIZE_CAST4) 0,	/* qmgr options */
-		       (REC_TYPE_SIZE_CAST5) 0);	/* content length */
+		       (REC_TYPE_SIZE_CAST5) 0,	/* content length */
+		       (REC_TYPE_SIZE_CAST6) 0);	/* smtputf8 */
 
     /*
      * Pass control to the actual envelope processing routine.
@@ -340,13 +349,19 @@ static void cleanup_envelope_process(CLEANUP_STATE *state, int type,
 
     /*
      * Initial envelope non-recipient record processing.
+     * 
+     * If the message was requeued with "postsuper -r" use their
+     * SMTPUTF8_REQUESTED flag.
      */
     if (state->flags & CLEANUP_FLAG_INRCPT)
 	/* Tell qmgr that recipient records are mixed with other information. */
 	state->qmgr_opts |= QMGR_READ_FLAG_MIXED_RCPT_OTHER;
-    if (type == REC_TYPE_SIZE)
-	/* Use our own SIZE record instead. */
+    if (type == REC_TYPE_SIZE) {
+	/* Use our own SIZE record, except for the SMTPUTF8_REQUESTED flag. */
+	(void) sscanf(buf, "%*s $*s %*s %*s %*s %d", &state->smtputf8);
+	state->smtputf8 &= SMTPUTF8_FLAG_REQUESTED;
 	return;
+    }
     if (mapped_type == REC_TYPE_CTIME)
 	/* Use our own expiration time base record instead. */
 	return;
@@ -370,6 +385,8 @@ static void cleanup_envelope_process(CLEANUP_STATE *state, int type,
 	return;
     }
     if (type == REC_TYPE_FROM) {
+	off_t after_sender_offs;
+
 	/* Allow only one instance. */
 	if (state->sender != 0) {
 	    msg_warn("%s: message rejected: multiple envelope sender records",
@@ -382,14 +399,10 @@ static void cleanup_envelope_process(CLEANUP_STATE *state, int type,
 	    if ((state->sender_pt_offset = vstream_ftell(state->dst)) < 0)
 		msg_fatal("%s: vstream_ftell %s: %m:", myname, cleanup_path);
 	}
-	cleanup_addr_sender(state, buf);
+	after_sender_offs = cleanup_addr_sender(state, buf);
 	if (state->milters || cleanup_milters) {
-	    /* Make room to replace sender. */
-	    if ((len = strlen(state->sender)) < REC_TYPE_PTR_PAYL_SIZE)
-		rec_pad(state->dst, REC_TYPE_PTR, REC_TYPE_PTR_PAYL_SIZE - len);
 	    /* Remember the after-sender record offset. */
-	    if ((state->sender_pt_target = vstream_ftell(state->dst)) < 0)
-		msg_fatal("%s: vstream_ftell %s: %m:", myname, cleanup_path);
+	    state->sender_pt_target = after_sender_offs;
 	}
 	if (cleanup_milters != 0
 	    && state->milters == 0
@@ -398,31 +411,21 @@ static void cleanup_envelope_process(CLEANUP_STATE *state, int type,
 	return;
     }
     if (mapped_type == REC_TYPE_DSN_ENVID) {
-	/* Allow only one instance. */
-	if (state->dsn_envid != 0) {
-	    msg_warn("%s: message rejected: multiple DSN envelope ID records",
-		     state->queue_id);
-	    state->errs |= CLEANUP_STAT_BAD;
-	    return;
-	}
+	/* Don't break "postsuper -r" after Milter overrides ENVID. */
 	if (!allprint(mapped_buf)) {
 	    msg_warn("%s: message rejected: bad DSN envelope ID record",
 		     state->queue_id);
 	    state->errs |= CLEANUP_STAT_BAD;
 	    return;
 	}
+	if (state->dsn_envid != 0)
+	    myfree(state->dsn_envid);
 	state->dsn_envid = mystrdup(mapped_buf);
 	cleanup_out(state, type, buf, len);
 	return;
     }
     if (mapped_type == REC_TYPE_DSN_RET) {
-	/* Allow only one instance. */
-	if (state->dsn_ret != 0) {
-	    msg_warn("%s: message rejected: multiple DSN RET records",
-		     state->queue_id);
-	    state->errs |= CLEANUP_STAT_BAD;
-	    return;
-	}
+	/* Don't break "postsuper -r" after Milter overrides RET. */
 	if (!alldig(mapped_buf) || (junk = atoi(mapped_buf)) == 0
 	    || DSN_RET_OK(junk) == 0) {
 	    msg_warn("%s: message rejected: bad DSN RET record <%.200s>",
@@ -478,6 +481,16 @@ static void cleanup_envelope_process(CLEANUP_STATE *state, int type,
 		state->errs |= CLEANUP_STAT_BAD;
 		return;
 	    }
+	}
+	if (strcmp(attr_name, MAIL_ATTR_TRACE_FLAGS) == 0) {
+	    if (!alldig(attr_value)) {
+		msg_warn("%s: message rejected: bad TFLAG record <%.200s>",
+			 state->queue_id, buf);
+		state->errs |= CLEANUP_STAT_BAD;
+		return;
+	    }
+	    if (state->tflags == 0)
+		state->tflags = DEL_REQ_TRACE_FLAGS(atoi(attr_value));
 	}
 	nvtable_update(state->attr, attr_name, attr_value);
 	cleanup_out(state, type, buf, len);

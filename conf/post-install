@@ -40,25 +40,31 @@
 #	Arguments
 # .IP create-missing
 #	Create missing queue directories with ownerships and permissions
-#	according to the contents of $daemon_directory/postfix-files, using
-#	the mail_owner and setgid_group parameter settings from the command
-#	line, process environment or from the installed main.cf file.
+#	according to the contents of $meta_directory/postfix-files
+#	and optionally in $meta_directory/postfix-files.d/*, using
+#	the mail_owner and setgid_group parameter settings from the
+#	command line, process environment or from the installed
+#	main.cf file.
 #
 #	This is required at Postfix start-up time.
 # .IP set-permissions
 #	Set all file/directory ownerships and permissions according to the
-#	contents of $daemon_directory/postfix-files, using the mail_owner
-#	and setgid_group parameter settings from the command line, process
-#	environment or from the installed main.cf file. Implies create-missing.
+#	contents of $meta_directory/postfix-files and optionally
+#	in $meta_directory/postfix-files.d/*, using the mail_owner
+#	and setgid_group parameter settings from the command line,
+#	process environment or from the installed main.cf file.
+#	Implies create-missing.
 #
 #	This is required when installing Postfix from a pre-built package,
 #	or when changing the mail_owner or setgid_group installation parameter
 #	settings after Postfix is already installed.
 # .IP upgrade-permissions
 #	Update ownership and permission of existing files/directories as
-#	specified in $daemon_directory/postfix-files, using the mail_owner
-#	and setgid_group parameter settings from the command line, process
-#	environment or from the installed main.cf file. Implies create-missing.
+#	specified in $meta_directory/postfix-files and optionally
+#	in $meta_directory/postfix-files.d/*, using the mail_owner
+#	and setgid_group parameter settings from the command line,
+#	process environment or from the installed main.cf file.
+#	Implies create-missing.
 #
 #	This is required when upgrading an existing Postfix instance.
 # .IP upgrade-configuration
@@ -169,11 +175,21 @@
 #	This feature is obsolete as of Postfix 2.1.
 # .IP readme_directory
 #	The directory for the Postfix README files.
+# .IP shlib_directory
+#	The directory for the Postfix shared-library files, and for
+#	the Postfix dabatase plugin files with a relative pathname
+#	in the file dynamicmaps.cf.
+# .IP meta_directory
+#	The directory for non-executable files that are shared
+#	among multiple Postfix instances, such as postfix-files,
+#	dynamicmaps.cf, as well as the multi-instance template files
+#	main.cf.proto and master.cf.proto.
 # SEE ALSO
 #	postfix-install(1) Postfix primary installation script.
 # FILES
 #	$config_directory/main.cf, Postfix installation parameters.
-#	$daemon_directory/postfix-files, installation control file.
+#	$meta_directory/postfix-files, installation control file.
+#	$meta_directory/postfix-files.d/*, optional control files.
 #	$config_directory/install.cf, obsolete configuration file.
 # LICENSE
 # .ad
@@ -184,6 +200,11 @@
 #	IBM T.J. Watson Research
 #	P.O. Box 704
 #	Yorktown Heights, NY 10598, USA
+#
+#	Wietse Venema
+#	Google, Inc.
+#	111 8th Avenue
+#	New York, NY 10011, USA
 #--
 
 umask 022
@@ -198,7 +219,7 @@ debug=:
 MOST_PARAMETERS="command_directory daemon_directory data_directory
     html_directory mail_owner mailq_path manpage_directory
     newaliases_path queue_directory readme_directory sample_directory
-    sendmail_path setgid_group"
+    sendmail_path setgid_group shlib_directory meta_directory"
 NON_SHARED="config_directory queue_directory data_directory"
 
 USAGE="Usage: $0 [name=value] command
@@ -218,6 +239,8 @@ obsolete=; keep_list=;
 for arg
 do
     case $arg in
+	*[" 	"]*) echo $0: "Error: argument contains whitespace: '$arg'"
+		     exit 1;;
                 *=*) IFS= eval $arg; IFS="$BACKUP_IFS";;
      create-missing) create=1;;
 	  set-perm*) create=1; set_perms=1;;
@@ -280,8 +303,8 @@ do
     esac
 done
 
-test -f $daemon_directory/postfix-files || {
-    echo $0: Error: $daemon_directory/postfix-files is not a file. 1>&2
+test -f $meta_directory/postfix-files || {
+    echo $0: Error: $meta_directory/postfix-files is not a file. 1>&2
     exit 1
 }
 
@@ -354,7 +377,8 @@ case $setgid_group in
 esac
 
 for path in "$daemon_directory" "$command_directory" "$queue_directory" \
-    "$sendmail_path" "$newaliases_path" "$mailq_path" "$manpage_directory"
+    "$sendmail_path" "$newaliases_path" "$mailq_path" "$manpage_directory" \
+    "$meta_directory"
 do
    case "$path" in
    /*) ;;
@@ -362,7 +386,7 @@ do
    esac
 done
 
-for path in "$html_directory" "$readme_directory"
+for path in "$html_directory" "$readme_directory" "$shlib_directory"
 do
    case "$path" in
    /*) ;;
@@ -407,10 +431,37 @@ POSTCONF="$command_directory/postconf"
 
 # Save settings, allowing command line/environment override.
 
+# Undo MAIL_VERSION expansion at the end of a parameter value. If
+# someone really wants the expanded mail version in main.cf, then
+# we're sorry.
+
+# Confine side effects from mail_version unexpansion within a subshell.
+
+(case "$mail_version" in
+"") mail_version="`$POSTCONF -dhx mail_version`" || exit 1
+esac
+
+for name in $MOST_PARAMETERS
+do
+    eval junk=\$$name
+    case "$junk" in
+    *"$mail_version"*) 
+	case "$pattern" in
+	"") pattern=`echo "$mail_version" | sed 's/\./\\\\./g'` || exit 1
+	esac
+	val=`echo "$junk" | sed "s/$pattern"'$/${mail_version}/g'` || exit 1
+	eval ${name}='"$val"'
+    esac
+done
+
+# XXX Maybe update main.cf only with first install, upgrade, set
+# permissions, and what else? Should there be a warning otherwise?
+
 override=
 for name in $MOST_PARAMETERS
 do
-    eval test \"\$$name\" = \"`$POSTCONF -c $config_directory -h $name`\" || {
+    eval junk=\"\$$name\"
+    test "$junk" = "`$POSTCONF -c $config_directory -h $name`" || {
 	override=1
 	break
     }
@@ -431,97 +482,104 @@ test -n "$override" && {
 	"manpage_directory = $manpage_directory" \
 	"sample_directory = $sample_directory" \
 	"readme_directory = $readme_directory" \
+	"shlib_directory = $shlib_directory" \
+	"meta_directory = $meta_directory" \
     || exit 1
-}
+} || exit 0) || exit 1
 
-# Use file/directory status information in $daemon_directory/postfix-files.
+# Use file/directory status information in $meta_directory/postfix-files.
 
 test -n "$create" && {
-    exec <$daemon_directory/postfix-files || exit 1
-    while IFS=: read path type owner group mode flags junk
+    postfix_files_d=$meta_directory/postfix-files.d
+    for postfix_file in $meta_directory/postfix-files \
+	`test -d $postfix_files_d && { find $postfix_files_d -type f | sort; }`
     do
-	IFS="$BACKUP_IFS"
-	set_permission=
-	# Skip comments. Skip shared files, if updating a secondary instance.
-	case $path in
-	[$]*) case "$update_shared_files" in
-	      1) $debug keep non-shared or shared $path;;
-	      *) non_shared=
-		 for name in $NON_SHARED
-		 do
-		     case $path in
-		     "\$$name"*) non_shared=1; break;;
-		     esac
-		 done
-		 case "$non_shared" in
-		  1) $debug keep non-shared $path;;
-		  *) $debug skip shared $path; continue;;
-		 esac;;
-	      esac;;
-	   *) continue;;
-	esac
-	# Skip hard links and symbolic links.
-	case $type in
-	[hl]) continue;;
-	[df]) ;;
-	   *) echo unknown type $type for $path in $daemon_directory/postfix-files1>&2; exit 1;;
-	esac
-	# Expand $name, and canonicalize null fields.
-	for name in path owner group flags
+	exec <$postfix_file || exit 1
+	while IFS=: read path type owner group mode flags junk
 	do
-	    eval junk=\${$name}
-	    case $junk in
-	    [$]*) eval $name=$junk;;
-	       -) eval $name=;;
-	       *) ;;
+	    IFS="$BACKUP_IFS"
+	    set_permission=
+	    # Skip comments. Skip shared files, if updating a secondary instance.
+	    case $path in
+	    [$]*) case "$update_shared_files" in
+		  1) $debug keep non-shared or shared $path;;
+		  *) non_shared=
+		     for name in $NON_SHARED
+		     do
+			 case $path in
+			 "\$$name"*) non_shared=1; break;;
+			 esac
+		     done
+		     case "$non_shared" in
+		      1) $debug keep non-shared $path;;
+		      *) $debug skip shared $path; continue;;
+		     esac;;
+		  esac;;
+	       *) continue;;
 	    esac
-	done
-	# Skip uninstalled files.
-	case $path in
-	no|no/*) continue;;
-	esac
-	# Pick up the flags.
-	case $flags in *u*) upgrade_flag=1;; *) upgrade_flag=;; esac
-	case $flags in *c*) create_flag=1;; *) create_flag=;; esac
-	case $flags in *r*) recursive="-R";; *) recursive=;; esac
-	case $flags in *o*) obsolete_flag=1;; *) obsolete_flag=;; esac
-	case $flags in *[1i]*) test ! -r "$path" -a "$config_directory" != \
-				"$def_config_directory" && continue;; esac
-	# Flag obsolete objects. XXX Solaris 2..9 does not have "test -e".
-	if [ -n "$obsolete_flag" ]
-	then
-	    test -r $path -a "$type" != "d" && obsolete="$obsolete $path"
-	    continue;
-	else
-	    keep_list="$keep_list $path"
-	fi
-	# Create missing directories with proper owner/group/mode settings.
-	if [ -n "$create" -a "$type" = "d" -a -n "$create_flag" -a ! -d "$path" ]
-	then
-	    mkdir $path || exit 1
-	    set_permission=1
-	# Update all owner/group/mode settings.
-	elif [ -n "$set_perms" ]
-	then
-	    set_permission=1
-	# Update obsolete owner/group/mode settings.
-	elif [ -n "$upgrade_perms" -a -n "$upgrade_flag" ]
-	then
-	    set_permission=1
-	fi
-	test -n "$set_permission" && {
-	    chown $recursive $owner $path || exit 1
-	    test -z "$group" || chgrp $recursive $group $path || exit 1
-	    # Don't "chmod -R"; queue file status is encoded in mode bits.
-	    if [ "$type" = "d" -a -n "$recursive" ]
+	    # Skip hard links and symbolic links.
+	    case $type in
+	    [hl]) continue;;
+	    [df]) ;;
+	       *) echo unknown type $type for $path in $postfix_file 1>&2; exit 1;;
+	    esac
+	    # Expand $name, and canonicalize null fields.
+	    for name in path owner group flags
+	    do
+		eval junk=\${$name}
+		case $junk in
+		[$]*) eval $name=$junk;;
+		   -) eval $name=;;
+		   *) ;;
+		esac
+	    done
+	    # Skip uninstalled files.
+	    case $path in
+	    no|no/*) continue;;
+	    esac
+	    # Pick up the flags.
+	    case $flags in *u*) upgrade_flag=1;; *) upgrade_flag=;; esac
+	    case $flags in *c*) create_flag=1;; *) create_flag=;; esac
+	    case $flags in *r*) recursive="-R";; *) recursive=;; esac
+	    case $flags in *o*) obsolete_flag=1;; *) obsolete_flag=;; esac
+	    case $flags in *[1i]*) test ! -r "$path" -a "$config_directory" != \
+				    "$def_config_directory" && continue;; esac
+	    # Flag obsolete objects. XXX Solaris 2..9 does not have "test -e".
+	    if [ -n "$obsolete_flag" ]
 	    then
-		find $path -type d -exec chmod $mode "{}" ";"
+		test -r $path -a "$type" != "d" && obsolete="$obsolete $path"
+		continue;
 	    else
-		chmod $mode $path
-	    fi || exit 1
-	}
+		keep_list="$keep_list $path"
+	    fi
+	    # Create missing directories with proper owner/group/mode settings.
+	    if [ -n "$create" -a "$type" = "d" -a -n "$create_flag" -a ! -d "$path" ]
+	    then
+		mkdir $path || exit 1
+		set_permission=1
+	    # Update all owner/group/mode settings.
+	    elif [ -n "$set_perms" ]
+	    then
+		set_permission=1
+	    # Update obsolete owner/group/mode settings.
+	    elif [ -n "$upgrade_perms" -a -n "$upgrade_flag" ]
+	    then
+		set_permission=1
+	    fi
+	    test -n "$set_permission" && {
+		chown $recursive $owner $path || exit 1
+		test -z "$group" || chgrp $recursive $group $path || exit 1
+		# Don't "chmod -R"; queue file status is encoded in mode bits.
+		if [ "$type" = "d" -a -n "$recursive" ]
+		then
+		    find $path -type d -exec chmod $mode "{}" ";"
+		else
+		    chmod $mode $path
+		fi || exit 1
+	    }
+	done
+	IFS="$BACKUP_IFS"
     done
-    IFS="$BACKUP_IFS"
 }
 
 # Upgrade existing Postfix configuration files if necessary.
@@ -799,11 +857,45 @@ EOF
     # when IPv6 support is not compiled in. See util/sys_defs.h.
 
     test "`$POSTCONF -dh inet_protocols`" = "ipv4" ||
-	test -n "`$POSTCONF -c $config_directory -nh inet_protocols`" || {
-	echo COMPATIBILITY: editing main.cf, setting inet_protocols=ipv4.
-	echo Specify inet_protocols explicitly if you want to enable IPv6.
-	echo In a future release IPv6 will be enabled by default.
+	test -n "`$POSTCONF -c $config_directory -n inet_protocols`" || {
+	cat <<EOF | ${FMT}
+    COMPATIBILITY: editing $config_directory/main.cf, setting
+    inet_protocols=ipv4.  Specify inet_protocols explicitly if you
+    want to enable IPv6.
+    In a future release IPv6 will be enabled by default.
+EOF
 	$POSTCONF -c $config_directory inet_protocols=ipv4 || exit 1
+    }
+
+# Disabled because unhelpful down-stream maintainers disable the safety net.
+#    # Postfix 2.10.
+#    # Safety net for incompatible changes due to the introduction
+#    # of the smtpd_relay_restrictions feature to separate the
+#    # mail relay policy from the spam blocking policy.
+#    # PLEASE DO NOT REMOVE THIS CODE. ITS PURPOSE IS TO PREVENT
+#    # INBOUND MAIL FROM UNEXPECTEDLY BOUNCING AFTER UPGRADING FROM
+#    # POSTFIX BEFORE 2.10.
+#    test -n "`$POSTCONF -c $config_directory -n smtpd_relay_restrictions`" || {
+#	cat <<EOF | ${FMT}
+#    COMPATIBILITY: editing $config_directory/main.cf, overriding
+#    smtpd_relay_restrictions to prevent inbound mail from
+#    unexpectedly bouncing.
+#    Specify an empty smtpd_relay_restrictions value to keep using 
+#    smtpd_recipient_restrictions as before.
+#EOF
+#	$POSTCONF -c $config_directory "smtpd_relay_restrictions = \
+#	    permit_mynetworks permit_sasl_authenticated \
+#	    defer_unauth_destination" || exit 1
+#    }
+
+    # Postfix 3.4
+    # Add a postlog service entry.
+
+    grep '^postlog' $config_directory/master.cf >/dev/null || {
+	echo Editing $config_directory/master.cf, adding missing entry for postlog unix-domain datagram service
+	cat >>$config_directory/master.cf <<EOF || exit 1
+postlog   unix-dgram n  -       n       -       1       postlogd
+EOF
     }
 }
 

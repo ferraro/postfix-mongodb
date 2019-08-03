@@ -36,6 +36,7 @@
 extern void mail_conf_read(void);
 extern void mail_conf_suck(void);
 extern void mail_conf_flush(void);
+extern void mail_conf_checkdir(const char *);
 
 extern void mail_conf_update(const char *, const char *);
 extern const char *mail_conf_lookup(const char *);
@@ -60,6 +61,9 @@ extern int get_mail_conf_int2(const char *, const char *, int, int, int);
 extern long get_mail_conf_long2(const char *, const char *, long, long, long);
 extern int get_mail_conf_time2(const char *, const char *, int, int, int, int);
 extern int get_mail_conf_nint2(const char *, const char *, int, int, int);
+extern void check_mail_conf_str(const char *, const char *, int, int);
+extern void check_mail_conf_time(const char *, int, int, int);
+extern void check_mail_conf_int(const char *, int, int, int);
 
  /*
   * Lookup with function-call defaults.
@@ -235,6 +239,11 @@ extern void get_mail_conf_nbool_fn_table(const CONFIG_NBOOL_FN_TABLE *);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif

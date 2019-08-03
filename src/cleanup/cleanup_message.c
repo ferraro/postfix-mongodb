@@ -39,6 +39,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -70,6 +75,7 @@
 #include <rec_type.h>
 #include <cleanup_user.h>
 #include <tok822.h>
+#include <lex_822.h>
 #include <header_opts.h>
 #include <quote_822_local.h>
 #include <mail_params.h>
@@ -177,7 +183,7 @@ static void cleanup_rewrite_sender(CLEANUP_STATE *state,
 	vstring_strcat(header_buf, ": ");
 	tok822_externalize(header_buf, tree, TOK822_STR_HEAD);
     }
-    myfree((char *) addr_list);
+    myfree((void *) addr_list);
     tok822_free_tree(tree);
     if ((hdr_opts->flags & HDR_OPT_DROP) == 0) {
 	if (did_rewrite)
@@ -234,7 +240,7 @@ static void cleanup_rewrite_recip(CLEANUP_STATE *state,
 	vstring_strcat(header_buf, ": ");
 	tok822_externalize(header_buf, tree, TOK822_STR_HEAD);
     }
-    myfree((char *) addr_list);
+    myfree((void *) addr_list);
     tok822_free_tree(tree);
     if ((hdr_opts->flags & HDR_OPT_DROP) == 0) {
 	if (did_rewrite)
@@ -345,6 +351,11 @@ static const char *cleanup_act(CLEANUP_STATE *state, char *context,
 	}
 	return (buf);
     }
+    if (STREQUAL(value, "PASS", command_len)) {
+	cleanup_act_log(state, "pass", context, buf, optional_text);
+	state->flags &= ~CLEANUP_FLAG_FILTER_ALL;
+	return (buf);
+    }
     if (STREQUAL(value, "DISCARD", command_len)) {
 	cleanup_act_log(state, "discard", context, buf, optional_text);
 	state->flags |= CLEANUP_FLAG_DISCARD;
@@ -385,11 +396,26 @@ static const char *cleanup_act(CLEANUP_STATE *state, char *context,
     if (STREQUAL(value, "PREPEND", command_len)) {
 	if (*optional_text == 0) {
 	    msg_warn("PREPEND action without text in %s map", map_class);
-	} else if (strcmp(context, CLEANUP_ACT_CTXT_HEADER) == 0
-		   && !is_header(optional_text)) {
-	    msg_warn("bad PREPEND header text \"%s\" in %s map -- "
-		     "need \"headername: headervalue\"",
-		     optional_text, map_class);
+	} else if (strcmp(context, CLEANUP_ACT_CTXT_HEADER) == 0) {
+	    if (!is_header(optional_text)) {
+		msg_warn("bad PREPEND header text \"%s\" in %s map -- "
+			 "need \"headername: headervalue\"",
+			 optional_text, map_class);
+	    }
+
+	    /*
+	     * By design, cleanup_out_header() may modify content. Play safe
+	     * and prepare for future developments.
+	     */
+	    else {
+		VSTRING *temp;
+
+		cleanup_act_log(state, "prepend", context, buf, optional_text);
+		temp = vstring_strcpy(vstring_alloc(strlen(optional_text)),
+				      optional_text);
+		cleanup_out_header(state, temp);
+		vstring_free(temp);
+	    }
 	} else {
 	    cleanup_act_log(state, "prepend", context, buf, optional_text);
 	    cleanup_out_string(state, REC_TYPE_NORM, optional_text);
@@ -424,6 +450,23 @@ static const char *cleanup_act(CLEANUP_STATE *state, char *context,
 	    state->flags &= ~CLEANUP_FLAG_FILTER_ALL;
 	}
 	return (buf);
+    }
+    if (STREQUAL(value, "BCC", command_len)) {
+	if (strchr(optional_text, '@') == 0) {
+	    msg_warn("bad BCC address \"%s\" in %s map -- "
+		     "need user@domain",
+		     optional_text, map_class);
+	} else {
+	    if (state->hbc_rcpt == 0)
+		state->hbc_rcpt = argv_alloc(1);
+	    argv_add(state->hbc_rcpt, optional_text, (char *) 0);
+	    cleanup_act_log(state, "bcc", context, buf, optional_text);
+	}
+	return (buf);
+    }
+    if (STREQUAL(value, "STRIP", command_len)) {
+	cleanup_act_log(state, "strip", context, buf, optional_text);
+	return (CLEANUP_ACT_DROP);
     }
     /* Allow and ignore optional text after the action. */
 
@@ -479,6 +522,10 @@ static void cleanup_header_callback(void *context, int header_class,
     if (hdr_opts && (hdr_opts->flags & HDR_OPT_MIME))
 	header_class = MIME_HDR_MULTIPART;
 
+    /* Update the Received: header count before maybe dropping headers below. */
+    if (hdr_opts && hdr_opts->type == HDR_RECEIVED)
+	state->hop_count += 1;
+
     if ((state->flags & CLEANUP_FLAG_FILTER)
 	&& (CHECK(MIME_HDR_PRIMARY, cleanup_header_checks, VAR_HEADER_CHECKS)
     || CHECK(MIME_HDR_MULTIPART, cleanup_mimehdr_checks, VAR_MIMEHDR_CHECKS)
@@ -496,10 +543,11 @@ static void cleanup_header_callback(void *context, int header_class,
 	    } else if (result != header) {
 		vstring_strcpy(header_buf, result);
 		hdr_opts = header_opts_find(result);
-		myfree((char *) result);
+		myfree((void *) result);
 	    }
 	} else if (checks->error) {
-	    msg_warn("%s: %s map lookup problem -- deferring delivery",
+	    msg_warn("%s: %s map lookup problem -- "
+		     "message not accepted, try again later",
 		     state->queue_id, checks->title);
 	    state->errs |= CLEANUP_STAT_WRITE;
 	}
@@ -578,9 +626,16 @@ static void cleanup_header_callback(void *context, int header_class,
 	    msg_info("%s: message-id=%s", state->queue_id, hdrval);
 	if (hdr_opts->type == HDR_RESENT_MESSAGE_ID)
 	    msg_info("%s: resent-message-id=%s", state->queue_id, hdrval);
-	if (hdr_opts->type == HDR_RECEIVED)
-	    if (++state->hop_count >= var_hopcount_limit)
+	if (hdr_opts->type == HDR_RECEIVED) {
+	    if (state->hop_count >= var_hopcount_limit) {
+		msg_warn("%s: message rejected: hopcount exceeded",
+			 state->queue_id);
 		state->errs |= CLEANUP_STAT_HOPS;
+	    }
+	    /* Save our Received: header after maybe updating headers above. */
+	    if (state->hop_count == 1)
+		argv_add(state->auto_hdrs, vstring_str(header_buf), ARGV_END);
+	}
 	if (CLEANUP_OUT_OK(state)) {
 	    if (hdr_opts->flags & HDR_OPT_RR)
 		state->resent = "Resent-";
@@ -606,6 +661,7 @@ static void cleanup_header_done_callback(void *context)
     char    time_stamp[1024];		/* XXX locale dependent? */
     struct tm *tp;
     TOK822 *token;
+    TOK822 *dummy_token;
     time_t  tv;
 
     /*
@@ -617,6 +673,19 @@ static void cleanup_header_done_callback(void *context)
      */
     if (CLEANUP_OUT_OK(state) == 0)
 	return;
+
+    /*
+     * Future proofing: the Milter client's header suppression algorithm
+     * assumes that the MTA prepends its own Received: header. This
+     * assupmtion may be violated after some source-code update. The
+     * following check ensures consistency, at least for local submission.
+     */
+    if (state->hop_count < 1) {
+	msg_warn("%s: message rejected: no Received: header",
+		 state->queue_id);
+	state->errs |= CLEANUP_STAT_BAD;
+	return;
+    }
 
     /*
      * Add a missing (Resent-)Message-Id: header. The message ID gives the
@@ -680,14 +749,60 @@ static void cleanup_header_done_callback(void *context)
 				       HDR_RESENT_FROM : HDR_FROM))) == 0) {
 	quote_822_local(state->temp1, *state->sender ?
 			state->sender : MAIL_ADDR_MAIL_DAEMON);
-	vstring_sprintf(state->temp2, "%sFrom: %s",
-			state->resent, vstring_str(state->temp1));
 	if (*state->sender && state->fullname && *state->fullname) {
-	    vstring_sprintf(state->temp1, "(%s)", state->fullname);
-	    token = tok822_parse(vstring_str(state->temp1));
-	    vstring_strcat(state->temp2, " ");
-	    tok822_externalize(state->temp2, token, TOK822_STR_NONE);
-	    tok822_free_tree(token);
+	    char   *cp;
+
+	    /* Enforce some sanity on full name content. */
+	    while ((cp = strchr(state->fullname, '\r')) != 0
+		   || (cp = strchr(state->fullname, '\n')) != 0)
+		*cp = ' ';
+
+	    switch (hfrom_format_code) {
+
+		/*
+		 * "From: phrase <route-addr>". Quote the phrase if it
+		 * contains specials or the "%!" legacy address operators.
+		 */
+	    case HFROM_FORMAT_CODE_STD:
+		vstring_sprintf(state->temp2, "%sFrom: ", state->resent);
+		if (state->fullname[strcspn(state->fullname,
+					    "%!" LEX_822_SPECIALS)] == 0) {
+		    /* Normalize whitespace. */
+		    token = tok822_scan_limit(state->fullname, &dummy_token,
+					      var_token_limit);
+		} else {
+		    token = tok822_alloc(TOK822_QSTRING, state->fullname);
+		}
+		tok822_externalize(state->temp2, token, TOK822_STR_NONE);
+		tok822_free(token);
+		vstring_sprintf_append(state->temp2, " <%s>",
+				       vstring_str(state->temp1));
+		break;
+
+		/*
+		 * "From: addr-spec (ctext)". This is the obsolete form.
+		 */
+	    case HFROM_FORMAT_CODE_OBS:
+		vstring_sprintf(state->temp2, "%sFrom: %s ",
+				state->resent, vstring_str(state->temp1));
+		vstring_sprintf(state->temp1, "(%s)", state->fullname);
+		token = tok822_parse(vstring_str(state->temp1));
+		tok822_externalize(state->temp2, token, TOK822_STR_NONE);
+		tok822_free_tree(token);
+		break;
+	    default:
+		msg_panic("%s: unknown header format %d",
+			  myname, hfrom_format_code);
+	    }
+	}
+
+	/*
+	 * "From: addr-spec". This is the form in the absence of full name
+	 * information, also used for mail from mailer-daemon.
+	 */
+	else {
+	    vstring_sprintf(state->temp2, "%sFrom: %s",
+			    state->resent, vstring_str(state->temp1));
 	}
 	CLEANUP_OUT_BUF(state, REC_TYPE_NORM, state->temp2);
     }
@@ -785,11 +900,12 @@ static void cleanup_body_callback(void *context, int type,
 		return;
 	    } else if (result != buf) {
 		cleanup_out(state, type, result, strlen(result));
-		myfree((char *) result);
+		myfree((void *) result);
 		return;
 	    }
 	} else if (cleanup_body_checks->error) {
-	    msg_warn("%s: %s map lookup problem -- deferring delivery",
+	    msg_warn("%s: %s map lookup problem -- "
+		     "message not accepted, try again later",
 		     state->queue_id, cleanup_body_checks->title);
 	    state->errs |= CLEANUP_STAT_WRITE;
 	}

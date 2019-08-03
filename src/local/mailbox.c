@@ -41,6 +41,11 @@
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 /* System library. */
@@ -97,7 +102,7 @@ static int deliver_mailbox_file(LOCAL_STATE state, USER_ATTR usr_attr)
     int     deliver_status;
     int     copy_flags;
     VSTRING *biff;
-    long    end;
+    off_t   end;
     struct stat st;
     uid_t   spool_uid;
     gid_t   spool_gid;
@@ -202,7 +207,8 @@ static int deliver_mailbox_file(LOCAL_STATE state, USER_ATTR usr_attr)
 	    msg_warn("specify \"%s = no\" to ignore mailbox ownership mismatch",
 		     VAR_STRICT_MBOX_OWNER);
 	} else {
-	    end = vstream_fseek(mp->fp, (off_t) 0, SEEK_END);
+	    if ((end = vstream_fseek(mp->fp, (off_t) 0, SEEK_END)) < 0)
+		msg_fatal("seek mailbox file %s: %m", mailbox);
 	    mail_copy_status = mail_copy(COPY_ATTR(state.msg_attr), mp->fp,
 					 copy_flags, "\n", why);
 	}
@@ -277,7 +283,8 @@ int     deliver_mailbox(LOCAL_STATE state, USER_ATTR usr_attr, int *statusp)
      */
     if (*var_mbox_transp_maps && transp_maps == 0)
 	transp_maps = maps_create(VAR_MBOX_TRANSP_MAPS, var_mbox_transp_maps,
-				  DICT_FLAG_LOCK | DICT_FLAG_NO_REGSUB);
+				  DICT_FLAG_LOCK | DICT_FLAG_NO_REGSUB
+				  | DICT_FLAG_UTF8_REQUEST);
     /* The -1 is a hint for the down-stream deliver_completed() function. */
     if (transp_maps
 	&& (map_transport = maps_find(transp_maps, state.msg_attr.user,
@@ -332,10 +339,11 @@ int     deliver_mailbox(LOCAL_STATE state, USER_ATTR usr_attr, int *statusp)
 
     if (*var_mailbox_cmd_maps && cmd_maps == 0)
 	cmd_maps = maps_create(VAR_MAILBOX_CMD_MAPS, var_mailbox_cmd_maps,
-			       DICT_FLAG_LOCK | DICT_FLAG_PARANOID);
+			       DICT_FLAG_LOCK | DICT_FLAG_PARANOID
+			       | DICT_FLAG_UTF8_REQUEST);
 
     if (cmd_maps && (map_command = maps_find(cmd_maps, state.msg_attr.user,
-				    DICT_FLAG_NONE)) != 0) {
+					     DICT_FLAG_NONE)) != 0) {
 	status = deliver_command(state, usr_attr, map_command);
     } else if (cmd_maps && cmd_maps->error != 0) {
 	/* Details in the logfile. */

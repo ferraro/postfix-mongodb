@@ -15,6 +15,7 @@
   * External interface.
   */
 extern void clean_env(char **);
+extern void update_env(char **);
 
 /* LICENSE
 /* .ad
@@ -25,6 +26,11 @@ extern void clean_env(char **);
 /*	IBM T.J. Watson Research
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
+/*
+/*	Wietse Venema
+/*	Google, Inc.
+/*	111 8th Avenue
+/*	New York, NY 10011, USA
 /*--*/
 
 #endif
