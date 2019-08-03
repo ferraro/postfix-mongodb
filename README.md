@@ -18,10 +18,10 @@ experienced users of Postfix with C programming knowledges.
 In future, it would be good that this driver would be included in
 the official postfix release.
 
-The postfix version used here is 2.9.4.
+The postfix version used here is 3.4.6.
 
 If you need additional extra-features, please contact me at
-contact@ferraro.net.
+contact@aionda.com.
 
 Example of a /etc/postfix/mmongodb-aliases.cf file:
 
@@ -102,8 +102,18 @@ If nothing appears, then postmap command should return with an exit code of 1. Y
       # echo $?
       1
 
+Difference between original Postfix version
+===========================================
+List of additional src files compared to Postfix normal version:
+- global/dict_mongodb.h
+- global/dict_mongodb.c
+
+List of modified src files compared to Postfix normal version:
+- global/Makefile.in
+- global/mail_dict.c
+- master.c
+
 Implementing new features
 =========================
-
-If you need new features, please contact me at contact@ferraro.net.
+If you need new features, please contact me at contact@aionda.com.
 Any project work need to be paid. Additionally any work on it it will be included for everyone in this GitHub repository as its an open source project.
