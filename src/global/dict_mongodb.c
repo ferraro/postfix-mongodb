@@ -106,7 +106,7 @@ static void mongodb_parse_config(DICT_MONGODB *dict_mongodb, const char *mongodb
     CFG_PARSER	*p				= dict_mongodb->parser;
 	char		*tmp;
 	
-	dict_mongodb->uri			= cfg_get_str(p, "uri", "", 0, 0);
+	dict_mongodb->uri			= cfg_get_str(p, "uri", "", 1, 0);
 
     dict_mongodb->dbname		= cfg_get_str(p, "dbname", "", 1, 0);
 	dict_mongodb->collection	= cfg_get_str(p, "collection", "", 1, 0);
