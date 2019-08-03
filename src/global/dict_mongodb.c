@@ -62,11 +62,6 @@
 
 #include "cfg_parser.h"
 
-/*
- * SLMs.
- */
-#define STR(x)	vstring_str(x)
-
 /* Application-specific. */
 
 #include <bson/bson.h>
@@ -178,7 +173,7 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
 
 	if (found) {
 		// Value found in database
-        DICT_ERR_VAL_RETURN(dict, DICT_ERR_NONE, STR(found));
+        DICT_ERR_VAL_RETURN(dict, DICT_ERR_NONE, found);
 	}
 
 	// Value not found in database
