@@ -153,9 +153,15 @@ static const char *dict_mongodb_lookup(DICT *dict, const char *name)
     if (mongoc_cursor_next(cursor, &doc)) {
         char *str;
         // OK
-        str = bson_as_canonical_extended_json (doc, NULL);
-        found = strdup(str);
+        str = bson_as_canonical_extended_json(doc, NULL);
         bson_free(str);
+
+        // Return search key, which means value has been found in mongodb
+        if (!plus_name) {
+            found = name;
+        } else {
+            found = plus_name;
+        }
     }
 
     bson_destroy(query);
